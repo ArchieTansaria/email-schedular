@@ -1,0 +1,31 @@
+{
+  "name": "@reachinbox/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "pretest": "pnpm --filter @reachinbox/shared build",
+    "pretest:run": "pnpm --filter @reachinbox/shared build"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "8.19.0",
+    "@reachinbox/shared": "workspace:*",
+    "dotenv": "17.2.1",
+    "express": "5.1.0",
+    "pino": "9.9.0",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3",
+    "@types/supertest": "6.0.3",
+    "supertest": "7.1.4",
+    "tsx": "4.20.5",
+    "vitest": "3.2.4"
+  }
+}
