@@ -87,14 +87,27 @@ pnpm format:check
 
 Vitest runs Node projects for API, worker, and shared code, and jsdom for the web application. The API health test uses Supertest without opening a port.
 
-## Prisma
+## Database and Prisma
 
 ```bash
 pnpm prisma:validate
 pnpm prisma:generate
+pnpm db:migrate
 ```
 
-The Phase 0 schema defines only the PostgreSQL datasource and Prisma client generator. It deliberately has no business tables or migration; Phase 1 will add the locked domain model.
+The Prisma schema defines the User, Sender, Campaign, Email, and SlackIntegration source-of-truth models. Migration history lives in `prisma/migrations`; use migrations rather than `db push`.
+
+Fresh PostgreSQL volumes create both `reachinbox` and isolated `reachinbox_test` databases. If the PostgreSQL volume predates Phase 1, create the test database once:
+
+```bash
+docker compose exec postgres createdb -U postgres reachinbox_test
+```
+
+Database integration tests never use `DATABASE_URL`. They use `TEST_DATABASE_URL`, verify it differs from the development URL, and refuse database names that do not end in `_test` or `_rebuild`.
+
+```bash
+pnpm test:db
+```
 
 ## Environment model
 
@@ -102,4 +115,4 @@ Runtime configuration is parsed with Zod from an explicit input object. Applicat
 
 ## Phase status
 
-Phase 0 provides repository structure, configuration validation, runtime lifecycle foundations, local infrastructure, testing, and developer tooling only. No claim is made that the scheduler, persistence reconciliation, search, OAuth, queue dashboard, SMTP delivery, or assignment dashboard is implemented.
+Phase 0 provides the repository and runtime foundations. Phase 1 adds the relational domain schema, migration history, and PostgreSQL invariant tests. Scheduling, persistence reconciliation, search, OAuth, queue processing/dashboard, SMTP delivery, and the assignment dashboard remain pending.

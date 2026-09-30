@@ -6,3 +6,100 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+enum EmailStatus {
+  SCHEDULED
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model User {
+  id               String            @id @default(uuid()) @db.Uuid
+  googleSub        String            @unique @db.VarChar(255)
+  email            String            @db.VarChar(320)
+  name             String            @db.VarChar(255)
+  avatarUrl        String?           @db.Text
+  createdAt        DateTime          @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime          @updatedAt @db.Timestamptz(3)
+  senders          Sender[]
+  campaigns        Campaign[]
+  emails           Email[]
+  slackIntegration SlackIntegration?
+}
+
+model Sender {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @db.Uuid
+  fromName   String     @db.VarChar(255)
+  fromEmail  String     @db.VarChar(320)
+  active     Boolean    @default(true)
+  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  campaigns  Campaign[]
+  emails     Email[]
+
+  @@index([userId])
+}
+
+model Campaign {
+  id              String   @id @default(uuid()) @db.Uuid
+  userId          String   @db.Uuid
+  senderId        String   @db.Uuid
+  subject         String
+  body            String   @db.Text
+  startAt         DateTime @db.Timestamptz(3)
+  delayMs         Int
+  hourlyLimit     Int
+  totalRecipients Int
+  idempotencyKey  String   @db.VarChar(255)
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sender          Sender   @relation(fields: [senderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  emails          Email[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+}
+
+model Email {
+  id                  String      @id @default(uuid()) @db.Uuid
+  campaignId          String      @db.Uuid
+  userId              String      @db.Uuid
+  senderId            String      @db.Uuid
+  recipientEmail      String      @db.VarChar(320)
+  originalScheduledAt DateTime    @db.Timestamptz(3)
+  scheduledAt         DateTime    @db.Timestamptz(3)
+  status              EmailStatus @default(SCHEDULED)
+  bullJobId           String      @unique @db.VarChar(255)
+  sentAt              DateTime?   @db.Timestamptz(3)
+  failureReason       String?     @db.Text
+  smtpMessageId       String?     @db.VarChar(998)
+  previewUrl          String?     @db.Text
+  createdAt           DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime    @updatedAt @db.Timestamptz(3)
+  campaign            Campaign    @relation(fields: [campaignId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  user                User        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  sender              Sender      @relation(fields: [senderId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([userId, status, scheduledAt])
+  @@index([campaignId])
+  @@index([senderId, scheduledAt])
+}
+
+model SlackIntegration {
+  id                   String   @id @default(uuid()) @db.Uuid
+  userId               String   @unique @db.Uuid
+  teamId               String   @db.VarChar(255)
+  teamName             String   @db.VarChar(255)
+  channelId            String   @db.VarChar(255)
+  channelName          String   @db.VarChar(255)
+  accessTokenEncrypted String   @db.Text
+  webhookUrlEncrypted  String   @db.Text
+  connectedAt          DateTime @default(now()) @db.Timestamptz(3)
+  createdAt            DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt            DateTime @updatedAt @db.Timestamptz(3)
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+}

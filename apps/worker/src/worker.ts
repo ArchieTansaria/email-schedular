@@ -9,7 +9,7 @@ const config = parseWorkerConfig(process.env);
 const logger = createLogger(config);
 const shutdownManager = new ShutdownManager();
 
-// A referenced timer keeps the Phase 0 process alive until BullMQ owns the event loop in Phase 1.
+// A referenced timer keeps the foundation process alive until BullMQ owns the event loop later.
 const keepAliveTimer = setInterval(() => undefined, 60_000);
 shutdownManager.register(() => clearInterval(keepAliveTimer));
 
