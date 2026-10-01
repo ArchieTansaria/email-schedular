@@ -37,5 +37,5 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 
 logger.info(
   { concurrency: config.WORKER_CONCURRENCY },
-  'Worker runtime ready; queue processing is pending Phase 1',
+  'Worker runtime ready; queue processing not configured yet',
 );

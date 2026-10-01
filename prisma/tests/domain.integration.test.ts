@@ -166,9 +166,14 @@ describe('domain database invariants', () => {
   it('supports the indexed campaign and email query shapes', async () => {
     const user = await createTestUser();
     const sender = await createTestSender(user.id);
-    const olderCampaign = await createTestCampaign(user.id, sender.id, { subject: 'Older' });
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    const newerCampaign = await createTestCampaign(user.id, sender.id, { subject: 'Newer' });
+    const olderCampaign = await createTestCampaign(user.id, sender.id, {
+      subject: 'Older',
+      createdAt: new Date('2030-01-01T10:00:00.000Z'),
+    });
+    const newerCampaign = await createTestCampaign(user.id, sender.id, {
+      subject: 'Newer',
+      createdAt: new Date('2030-01-01T11:00:00.000Z'),
+    });
     const scheduledAt = new Date('2030-02-01T10:00:00.000Z');
     await createTestEmail(user.id, sender.id, olderCampaign.id, { scheduledAt });
     await createTestEmail(user.id, sender.id, newerCampaign.id, {

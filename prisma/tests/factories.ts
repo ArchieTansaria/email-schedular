@@ -48,6 +48,7 @@ export async function createTestCampaign(
       | 'hourlyLimit'
       | 'totalRecipients'
       | 'idempotencyKey'
+      | 'createdAt'
     >
   > = {},
 ): Promise<Campaign> {

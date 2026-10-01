@@ -1,8 +1,8 @@
 # ReachInbox Email Scheduler
 
-Phase 0 foundation for a production-oriented email scheduling assignment. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
+Production-oriented email scheduling assignment with its Phase 0 foundation and Phase 1 relational domain model complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
 
-Business functionality is intentionally not implemented yet. Campaign scheduling, BullMQ processing, SMTP delivery, rate limiting, OAuth, Elasticsearch indexing, and email APIs begin in later phases.
+Queue and scheduler functionality is not implemented yet. Campaign scheduling, BullMQ processing, SMTP delivery, rate limiting, OAuth, Elasticsearch indexing, and email APIs begin in later phases.
 
 ## Architecture
 
@@ -10,7 +10,7 @@ Business functionality is intentionally not implemented yet. Campaign scheduling
 - `apps/worker`: independent background process with validated configuration and graceful shutdown hooks.
 - `apps/web`: React, Vite, and Tailwind browser application.
 - `packages/shared`: portable contracts, schemas, constants, and utilities shared by all runtimes.
-- `prisma`: PostgreSQL/Prisma foundation; the business data model is intentionally deferred.
+- `prisma`: PostgreSQL/Prisma relational domain schema, migration history, and database integration tests.
 - `elastic`: boundary reserved for future Elasticsearch assets such as mappings.
 - `scripts`: operational scripts added as later phases require them.
 - `context`: read-only product and architecture guidance.
@@ -33,7 +33,7 @@ pnpm prisma:generate
 pnpm infra:up
 ```
 
-The checked-in example contains safe local infrastructure URLs and development-only secret placeholders. OAuth and Ethereal values remain empty because their functionality is not part of Phase 0. Never commit `.env` or real credentials.
+The checked-in example contains safe local infrastructure URLs and development-only secret placeholders. OAuth and Ethereal values remain empty because those features are not implemented yet. Never commit `.env` or real credentials.
 
 ## Development commands
 
@@ -115,4 +115,4 @@ Runtime configuration is parsed with Zod from an explicit input object. Applicat
 
 ## Phase status
 
-Phase 0 provides the repository and runtime foundations. Phase 1 adds the relational domain schema, migration history, and PostgreSQL invariant tests. Scheduling, persistence reconciliation, search, OAuth, queue processing/dashboard, SMTP delivery, and the assignment dashboard remain pending.
+Phase 0 repository and runtime foundations are complete. Phase 1 relational domain schema, migration history, and PostgreSQL invariant tests are complete. Scheduling, persistence reconciliation, search, OAuth, queue processing/dashboard, SMTP delivery, and the assignment dashboard remain pending.
