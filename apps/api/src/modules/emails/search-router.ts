@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 const searchQuerySchema = z.object({
   q: z.string().trim().min(1).max(200),
-  status: z.enum(EmailStatus).optional(),
+  status: z.union([z.enum(EmailStatus), z.array(z.enum(EmailStatus)).min(1).max(4)]).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -45,7 +45,9 @@ export function createEmailSearchRouter(options: {
     }
 
     try {
-      const result = await options.search.search({ userId: principal.userId, ...parsed.data });
+      const { status, ...query } = parsed.data;
+      const statuses = status === undefined ? undefined : Array.isArray(status) ? status : [status];
+      const result = await options.search.search({ userId: principal.userId, ...query, statuses });
       response.status(200).json(result);
     } catch (error) {
       options.logger.error(

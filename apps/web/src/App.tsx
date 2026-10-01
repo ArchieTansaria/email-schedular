@@ -1,19 +1,78 @@
-import { SERVICE_NAME } from '@reachinbox/shared/contracts';
+import { useQuery } from '@tanstack/react-query';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+
+import { api, ApiError } from './api/client.js';
+import { ComposePage } from './pages/ComposePage.js';
+import { DashboardPage } from './pages/DashboardPage.js';
+import { EmailDetailPage } from './pages/EmailDetailPage.js';
+import { LoginPage } from './pages/LoginPage.js';
+
+export function useCurrentUser() {
+  return useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: api.me,
+    retry: false,
+    staleTime: 60_000,
+  });
+}
+
+function Protected({ children }: { children: React.ReactNode }) {
+  const user = useCurrentUser();
+  const location = useLocation();
+  if (user.isPending) return <FullPageState message="Loading your workspace…" />;
+  if (user.error instanceof ApiError && user.error.status === 401) {
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+  }
+  if (user.isError) {
+    return <FullPageState message="We could not load your session." action={user.refetch} />;
+  }
+  return children;
+}
+
+function FullPageState({ message, action }: { message: string; action?: () => unknown }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-[#fafbfa] p-6">
+      <div className="text-center">
+        <p className="text-sm text-slate-600">{message}</p>
+        {action ? (
+          <button className="button-primary mt-4" onClick={() => action()} type="button">
+            Try again
+          </button>
+        ) : null}
+      </div>
+    </main>
+  );
+}
 
 export function App() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-slate-100">
-      <section className="w-full max-w-2xl rounded-3xl border border-slate-800 bg-slate-900 p-10 shadow-2xl shadow-indigo-950/30">
-        <p className="text-sm font-semibold uppercase tracking-[0.22em] text-indigo-400">Phase 0</p>
-        <h1 className="mt-4 text-4xl font-bold tracking-tight">ReachInbox Scheduler</h1>
-        <p className="mt-4 max-w-xl text-base leading-7 text-slate-300">
-          The API, worker, shared contracts, tests, and local infrastructure foundation are ready.
-          Product workflows arrive in the next phase.
-        </p>
-        <code className="mt-8 inline-flex rounded-full bg-slate-800 px-4 py-2 text-sm text-slate-300">
-          {SERVICE_NAME}
-        </code>
-      </section>
-    </main>
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/"
+        element={
+          <Protected>
+            <DashboardPage />
+          </Protected>
+        }
+      />
+      <Route
+        path="/compose"
+        element={
+          <Protected>
+            <ComposePage />
+          </Protected>
+        }
+      />
+      <Route
+        path="/emails/:id"
+        element={
+          <Protected>
+            <EmailDetailPage />
+          </Protected>
+        }
+      />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }

@@ -1,8 +1,8 @@
 # ReachInbox Email Scheduler
 
-Production-oriented email scheduling assignment with backend Phases 0–6C complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
+Production-oriented email scheduling assignment with the functional backend and browser application complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
 
-The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis permit, atomic PostgreSQL claims, configured Ethereal SMTP accounts, startup queue reconciliation, and a rebuildable Elasticsearch email projection. Real Google OIDC login uses Redis-backed application sessions; real Slack OAuth provides live rate-limit alerts. Non-search read APIs and the assignment dashboard remain pending.
+The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis permit, atomic PostgreSQL claims, configured Ethereal SMTP accounts, startup queue reconciliation, and a rebuildable Elasticsearch email projection. Real Google OIDC login uses Redis-backed application sessions; real Slack OAuth provides live rate-limit alerts. The React dashboard provides Scheduled/Sent reads, Elasticsearch search, campaign Compose/upload, Slack controls, and read-only email detail.
 
 ## Architecture
 
@@ -60,6 +60,9 @@ Default local URLs:
 - API health: `http://localhost:4000/api/health`
 - Google login: `http://localhost:4000/api/v1/auth/google`
 - Current session: `http://localhost:4000/api/v1/auth/me`
+- Active senders: `http://localhost:4000/api/v1/senders`
+- Scheduled emails: `http://localhost:4000/api/v1/emails/scheduled`
+- Sent/failed emails: `http://localhost:4000/api/v1/emails/sent`
 - Web: `http://localhost:5173`
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
@@ -369,4 +372,4 @@ Runtime configuration is parsed with Zod from an explicit input object. Applicat
 
 ## Phase status
 
-Phases 0–6C are complete through distributed throttling, queue recovery, Elasticsearch email search, real Slack OAuth/live alerts, and real Google OIDC with Redis sessions. Non-search read APIs and the assignment dashboard remain pending.
+Phases 0–6C and the functional application pass are complete through distributed throttling, queue recovery, Elasticsearch email search, real Slack OAuth/live alerts, real Google OIDC with Redis sessions, authenticated read APIs, and the React dashboard/Compose flow. Final visual pixel polish and deployment hardening remain pending.

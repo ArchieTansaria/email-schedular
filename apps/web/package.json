@@ -15,8 +15,10 @@
   },
   "dependencies": {
     "@reachinbox/shared": "workspace:*",
+    "@tanstack/react-query": "^5.104.0",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
     "@tailwindcss/vite": "4.1.12",

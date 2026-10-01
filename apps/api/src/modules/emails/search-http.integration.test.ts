@@ -59,6 +59,12 @@ describe('GET /api/v1/emails/search', () => {
     expect(sent.status).toBe(200);
     expect(sent.body.items).toHaveLength(1);
     expect(sent.body.items[0]).toMatchObject({ emailId: 'a2', status: 'SENT' });
+
+    const grouped = await request(app).get(
+      '/api/v1/emails/search?q=backend&status=SCHEDULED&status=SENT',
+    );
+    expect(grouped.status).toBe(200);
+    expect(grouped.body.items).toHaveLength(2);
   });
 
   it('returns clean empty results and rejects malformed pagination/status values', async () => {

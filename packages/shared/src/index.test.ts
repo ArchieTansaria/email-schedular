@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { SenderSummary } from './contracts.js';
 
 import {
   EnvironmentValidationError,
@@ -61,5 +62,16 @@ describe('shared package', () => {
       url: 'redis://localhost:6379',
       maxRetriesPerRequest: null,
     });
+  });
+
+  it('exports browser-safe application contracts', () => {
+    const sender: SenderSummary = {
+      id: 'sender-id',
+      fromName: 'Sender',
+      fromEmail: 'sender@example.com',
+      active: true,
+    };
+
+    expect(sender.active).toBe(true);
   });
 });

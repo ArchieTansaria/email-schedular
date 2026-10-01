@@ -13,3 +13,4 @@ export {
   makeEmailJobId,
   type SendEmailJobData,
 } from './queue.js';
+export { extractEmailCandidates, uniqueNormalizedEmailCandidates } from './leads.js';

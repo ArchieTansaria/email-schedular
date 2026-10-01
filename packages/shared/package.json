@@ -21,6 +21,10 @@
     "./queue": {
       "types": "./src/queue.ts",
       "import": "./dist/queue.js"
+    },
+    "./leads": {
+      "types": "./src/leads.ts",
+      "import": "./dist/leads.js"
     }
   },
   "scripts": {

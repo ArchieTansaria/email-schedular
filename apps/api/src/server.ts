@@ -95,6 +95,7 @@ const server = createServer(
     authRouter,
     logger,
     trustProxy: config.NODE_ENV === 'production',
+    prisma,
     ...(slackRouter ? { slackRouter } : {}),
   }),
 );

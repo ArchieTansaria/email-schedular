@@ -27,6 +27,7 @@ export interface EmailSearchQuery {
   userId: string;
   q: string;
   status?: EmailStatus | undefined;
+  statuses?: readonly EmailStatus[] | undefined;
   page: number;
   limit: number;
 }
@@ -120,7 +121,8 @@ export class EmailSearchService implements EmailSearchProjection {
 
   async search(input: EmailSearchQuery): Promise<EmailSearchResult> {
     const filters: Array<Record<string, unknown>> = [{ term: { userId: input.userId } }];
-    if (input.status) filters.push({ term: { status: input.status } });
+    if (input.statuses?.length) filters.push({ terms: { status: input.statuses } });
+    else if (input.status) filters.push({ term: { status: input.status } });
 
     const response = await this.#client.search<EmailSearchDocument>({
       index: this.indexName,

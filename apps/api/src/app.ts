@@ -12,6 +12,10 @@ import { BULL_BOARD_PATH, createBullBoardRouter } from './queue/bull-board.js';
 import { createEmailSearchRouter } from './modules/emails/search-router.js';
 import type { EmailQueue } from './queue/email-queue.js';
 import { requireAuthenticatedPrincipal } from './middleware/authenticated-principal.js';
+import type { PrismaClient } from '@prisma/client';
+import { EmailReadService } from './modules/emails/email-read-service.js';
+import { createEmailReadRouter } from './modules/emails/email-read-router.js';
+import { createSendersRouter } from './modules/senders/senders-router.js';
 
 export interface AppDependencies {
   emailQueue?: EmailQueue;
@@ -23,6 +27,7 @@ export interface AppDependencies {
   slackRouter?: Router;
   authRouter?: Router;
   trustProxy?: boolean;
+  prisma?: PrismaClient;
 }
 
 export function createApp({
@@ -35,6 +40,7 @@ export function createApp({
   slackRouter,
   authRouter,
   trustProxy = false,
+  prisma,
 }: AppDependencies = {}): Express {
   const app = express();
 
@@ -87,6 +93,20 @@ export function createApp({
         search: emailSearch,
         authenticate: authenticationMiddleware,
         logger,
+      }),
+    );
+  }
+
+  if (prisma) {
+    app.use(
+      '/api/v1/senders',
+      createSendersRouter({ prisma, authenticate: authenticationMiddleware }),
+    );
+    app.use(
+      '/api/v1/emails',
+      createEmailReadRouter({
+        emails: new EmailReadService(prisma),
+        authenticate: authenticationMiddleware,
       }),
     );
   }
