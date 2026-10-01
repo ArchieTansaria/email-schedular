@@ -12,14 +12,14 @@
     "test:run": "vitest run",
     "test:queue": "vitest run src/queue src/bull-board.integration.test.ts",
     "test:scheduling": "vitest run src/modules/campaigns",
-    "pretest": "pnpm --filter @reachinbox/shared build",
-    "pretest:run": "pnpm --filter @reachinbox/shared build"
+    "pretest": "pnpm --filter @reachinbox/shared build && pnpm --filter @reachinbox/search build",
+    "pretest:run": "pnpm --filter @reachinbox/shared build && pnpm --filter @reachinbox/search build"
   },
   "dependencies": {
     "@bull-board/api": "9.10.2",
     "@bull-board/express": "9.10.2",
-    "@elastic/elasticsearch": "8.19.0",
     "@prisma/client": "6.15.0",
+    "@reachinbox/search": "workspace:*",
     "@reachinbox/shared": "workspace:*",
     "bullmq": "6.3.11",
     "dotenv": "17.2.1",

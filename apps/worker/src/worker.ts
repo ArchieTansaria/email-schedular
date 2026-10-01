@@ -14,6 +14,8 @@ loadRootEnvironment();
 const config = parseWorkerConfig(process.env);
 const logger = createLogger(config);
 const prisma = createPrismaClient(config.DATABASE_URL);
+const elasticsearch = createElasticsearchClient(config);
+const emailSearch = new EmailSearchService({ client: elasticsearch, prisma });
 const emailSender = new EtherealEmailSender(getEtherealAccounts(config));
 const limiterRedis = createLimiterRedisClient(config.REDIS_URL);
 const recoveryQueue = createRecoveryQueue(config.REDIS_URL);
@@ -23,6 +25,7 @@ const shutdownManager = new ShutdownManager();
 // Later registrations close first. The Worker is registered after startup reconciliation.
 shutdownManager.register(() => emailSender.close());
 shutdownManager.register(() => prisma.$disconnect());
+shutdownManager.register(() => elasticsearch.close());
 shutdownManager.register(async () => {
   await limiterRedis.quit();
 });
@@ -71,6 +74,7 @@ try {
       maxEmailsPerHourPerSender: config.MAX_EMAILS_PER_HOUR_PER_SENDER,
     },
     logger,
+    searchProjection: emailSearch,
   });
   const worker = createEmailWorker({
     redisUrl: config.REDIS_URL,
@@ -86,3 +90,4 @@ try {
   await shutdownManager.shutdown();
   throw error;
 }
+import { createElasticsearchClient, EmailSearchService } from '@reachinbox/search';

@@ -2,13 +2,19 @@ import { randomUUID } from 'node:crypto';
 
 import { EmailStatus, PrismaClient } from '@prisma/client';
 import {
+  createElasticsearchClient,
+  EmailSearchService,
+  parseSearchConfig,
+  type EmailSearchProjection,
+} from '@reachinbox/search';
+import {
   EMAIL_QUEUE_NAME,
   SEND_EMAIL_JOB_NAME,
   makeEmailJobId,
   type SendEmailJobData,
 } from '@reachinbox/shared/queue';
 import { Queue, type Job, type Worker } from 'bullmq';
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEmailWorker } from '../email-worker.js';
 import type { SendPermitGate } from '../rate-limit/send-permit.js';
@@ -33,6 +39,13 @@ if (!testDatabaseName || !/_(?:test|rebuild)$/.test(testDatabaseName)) {
 const prisma = new PrismaClient({ datasourceUrl: testDatabaseUrl });
 const redisUrl = process.env.REDIS_URL ?? 'redis://localhost:6379';
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const elasticsearch = createElasticsearchClient(parseSearchConfig(process.env));
+const searchIndex = `reachinbox-test-worker-${randomUUID()}`.toLowerCase();
+const emailSearch = new EmailSearchService({
+  client: elasticsearch,
+  prisma,
+  indexName: searchIndex,
+});
 
 let prefix: string;
 let queue: Queue<SendEmailJobData>;
@@ -103,6 +116,7 @@ function startWorker(
   concurrency = 3,
   workerName = `worker-${workers.length + 1}`,
   sendPermitGate: SendPermitGate = alwaysAllowPermit,
+  searchProjection?: Pick<EmailSearchProjection, 'projectEmail'>,
 ) {
   const processor = new EmailProcessor({
     prisma,
@@ -110,6 +124,7 @@ function startWorker(
     sendPermitGate,
     platformLimits: { minSendDelayMs: 1, maxEmailsPerHourPerSender: 1_000 },
     logger,
+    ...(searchProjection ? { searchProjection } : {}),
   });
   const worker = createEmailWorker({
     redisUrl,
@@ -179,6 +194,8 @@ async function clearDatabase(): Promise<void> {
   await prisma.user.deleteMany();
 }
 
+beforeAll(() => emailSearch.ensureIndex());
+
 beforeEach(async () => {
   await clearDatabase();
   prefix = `reachinbox-worker-test-${randomUUID()}`;
@@ -200,7 +217,10 @@ afterEach(async () => {
   logger.error.mockClear();
 });
 
-afterAll(() => prisma.$disconnect());
+afterAll(async () => {
+  await elasticsearch.indices.delete({ index: searchIndex, ignore_unavailable: true });
+  await Promise.all([elasticsearch.close(), prisma.$disconnect()]);
+});
 
 describe('atomic Email claim', () => {
   it('moves SCHEDULED to PROCESSING and rejects a second claim', async () => {
@@ -234,6 +254,72 @@ describe('atomic Email claim', () => {
 });
 
 describe('BullMQ Worker delivery', () => {
+  it('projects SENT only after PostgreSQL finalization', async () => {
+    const { email } = await createTestEmail();
+    const sender = successfulSender();
+    const worker = startWorker(sender, 1, 'sent-projection-worker', alwaysAllowPermit, emailSearch);
+    await worker.waitUntilReady();
+    const result = waitForJobs([worker], 1);
+    await enqueue(email.id);
+    expect((await result)[0]?.state).toBe('completed');
+    await elasticsearch.indices.refresh({ index: searchIndex });
+    const projected = await elasticsearch.get({ index: searchIndex, id: email.id });
+    expect(projected._source).toMatchObject({ emailId: email.id, status: 'SENT' });
+  });
+
+  it('projects definitive FAILED outcomes and their reason', async () => {
+    const { email } = await createTestEmail();
+    const sender = successfulSender(async () => {
+      throw new DefinitiveDeliveryError('Mailbox rejected');
+    });
+    const worker = startWorker(
+      sender,
+      1,
+      'failed-projection-worker',
+      alwaysAllowPermit,
+      emailSearch,
+    );
+    await worker.waitUntilReady();
+    const result = waitForJobs([worker], 1);
+    await enqueue(email.id);
+    expect((await result)[0]?.state).toBe('failed');
+    await elasticsearch.indices.refresh({ index: searchIndex });
+    const projected = await elasticsearch.get({ index: searchIndex, id: email.id });
+    expect(projected._source).toMatchObject({
+      emailId: email.id,
+      status: 'FAILED',
+      failureReason: 'Mailbox rejected',
+    });
+  });
+
+  it('keeps SENT authoritative and does not retry SMTP when Elasticsearch projection fails', async () => {
+    const { email } = await createTestEmail();
+    const sender = successfulSender();
+    const projection = { projectEmail: vi.fn().mockRejectedValue(new Error('ES unavailable')) };
+    const worker = startWorker(
+      sender,
+      1,
+      'projection-failure-worker',
+      alwaysAllowPermit,
+      projection,
+    );
+    await worker.waitUntilReady();
+    const result = waitForJobs([worker], 1);
+
+    await enqueue(email.id);
+
+    expect((await result)[0]?.state).toBe('completed');
+    expect(await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).toMatchObject({
+      status: EmailStatus.SENT,
+    });
+    expect(sender.send).toHaveBeenCalledTimes(1);
+    expect(projection.projectEmail).toHaveBeenCalledWith(email.id);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ emailId: email.id, operation: 'project-email' }),
+      expect.stringContaining('Elasticsearch'),
+    );
+  });
+
   it('completes an orphaned queue job without attempting SMTP', async () => {
     const sender = successfulSender();
     const worker = startWorker(sender);
@@ -350,7 +436,7 @@ describe('BullMQ Worker delivery', () => {
     const sender = successfulSender(async () => {
       throw new AmbiguousDeliveryError('SMTP delivery outcome is uncertain');
     });
-    const worker = startWorker(sender);
+    const worker = startWorker(sender, 3, undefined, alwaysAllowPermit, emailSearch);
     await worker.waitUntilReady();
     let settled = waitForJobs([worker], 1);
 
@@ -361,6 +447,10 @@ describe('BullMQ Worker delivery', () => {
     ).resolves.toMatchObject({
       status: EmailStatus.PROCESSING,
       failureReason: 'SMTP outcome is uncertain; automatic resend disabled',
+    });
+    await elasticsearch.indices.refresh({ index: searchIndex });
+    await expect(elasticsearch.get({ index: searchIndex, id: email.id })).resolves.toMatchObject({
+      _source: { status: 'PROCESSING' },
     });
 
     settled = waitForJobs([worker], 1);

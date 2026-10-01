@@ -2,7 +2,7 @@
 
 Production-oriented email scheduling assignment with its Phase 0 foundation and Phase 1 relational domain model complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
 
-The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis permit, atomic PostgreSQL claims, configured Ethereal SMTP accounts, and startup queue reconciliation. Real Google authentication, Slack, Elasticsearch indexing, and read APIs begin in later phases.
+The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis permit, atomic PostgreSQL claims, configured Ethereal SMTP accounts, startup queue reconciliation, and a rebuildable Elasticsearch email projection. Real Google authentication, Slack, and non-search read APIs begin in later phases.
 
 ## Architecture
 
@@ -10,12 +10,13 @@ The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis 
 - `apps/worker`: independent BullMQ consumer with distributed sender throttling, queue reconciliation, atomic Email claims, reusable Ethereal transports, and graceful shutdown.
 - `apps/web`: React, Vite, and Tailwind browser application.
 - `packages/shared`: portable contracts, schemas, constants, and utilities shared by all runtimes.
+- `packages/search`: backend-only Elasticsearch mapping, projection, search, and reindex behavior shared by API and Worker.
 - `prisma`: PostgreSQL/Prisma relational domain schema, migration history, and database integration tests.
-- `elastic`: boundary reserved for future Elasticsearch assets such as mappings.
+- `elastic`: local Elasticsearch operational notes.
 - `scripts`: operational scripts added as later phases require them.
 - `context`: read-only product and architecture guidance.
 
-PostgreSQL will be the source of truth, Redis/BullMQ the durable execution layer, and Elasticsearch a searchable projection. The API and worker remain separate processes so they can later be deployed as a Render web service and Render background worker. Production Redis is expected to use an Upstash Redis TCP URL; Elasticsearch is expected to use Elastic Cloud.
+PostgreSQL is the source of truth, Redis/BullMQ is the durable execution layer, and Elasticsearch is an eventually consistent searchable projection. The API and worker remain separate processes so they can be deployed as a Render web service and Render background worker. Production Redis is expected to use an Upstash Redis TCP URL; Elasticsearch is expected to use Elastic Cloud.
 
 Phase 2 provides queue infrastructure, Phase 3 provides scheduling, Phase 4 delivers through Ethereal, and Phase 5 adds distributed runtime limits plus recovery.
 
@@ -62,6 +63,12 @@ Default local URLs:
 - Elasticsearch: `http://localhost:9200`
 
 The API and worker load `.env` from the repository root. Stop either process with `Ctrl+C`. Worker shutdown closes BullMQ first, allowing active jobs to finish, then closes recovery/limiter connections, Prisma, and SMTP transports.
+
+Initialize the non-destructive email search index after starting infrastructure:
+
+```bash
+pnpm search:init
+```
 
 ## Local infrastructure
 
@@ -247,10 +254,35 @@ pnpm test:scheduling
 
 PostgreSQL commits before Redis enqueue. An idempotent client retry can restore missing jobs after an enqueue error, and startup/manual reconciliation covers gaps where no client retries.
 
+## Elasticsearch email search
+
+The `emails-v1` index uses an explicit strict mapping and `Email.id` as `_id`. Campaign scheduling bulk-indexes persisted `SCHEDULED` rows after BullMQ enqueue. The Worker updates the projection only after PostgreSQL finalizes or reschedules a row. Projection failures are logged but never roll back scheduling, change delivery state, or retry SMTP.
+
+Authenticated search is available at:
+
+```bash
+curl --fail-with-body 'http://localhost:4000/api/v1/emails/search?q=backend&status=SENT&page=1&limit=20'
+```
+
+Every query filters by the authenticated principal inside Elasticsearch. Results can briefly lag PostgreSQL. Repair missing or stale projection documents in bounded batches with:
+
+```bash
+pnpm search:reindex
+```
+
+The command is idempotent and reports rows read, indexed, and failed. For a deliberate local rebuild only, stop API/Worker activity, confirm `ELASTICSEARCH_URL` points to the disposable development node, delete only `emails-v1`, then run `pnpm search:init` and `pnpm search:reindex`. Never delete an unverified production index.
+
+Run the real PostgreSQL/Elasticsearch projection suite, including the 1,000-document bulk path and deleted-index rebuild, with:
+
+```bash
+pnpm infra:up
+pnpm test:search
+```
+
 ## Environment model
 
-Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. SMTP values remain optional for unrelated processes but are required by worker-specific parsing. OAuth and managed Elasticsearch credentials remain optional until their phases.
+Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. SMTP values remain optional for unrelated processes but are required by worker-specific parsing. `ELASTICSEARCH_API_KEY` remains optional for local development and supports managed Elasticsearch. OAuth credentials remain optional until their phases.
 
 ## Phase status
 
-Phases 0–5 are complete through distributed throttling and queue recovery. Search, Google OAuth, Slack OAuth/live alerts, read APIs, and the assignment dashboard remain pending. The limiter already exposes the final-cap reservation metadata required by the later Slack phase.
+Phases 0–6A are complete through distributed throttling, queue recovery, and Elasticsearch email search. Google OAuth, Slack OAuth/live alerts, non-search read APIs, and the assignment dashboard remain pending. The limiter already exposes the final-cap reservation metadata required by the later Slack phase.

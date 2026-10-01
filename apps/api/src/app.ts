@@ -2,16 +2,19 @@ import { createHealthResponse } from '@reachinbox/shared/contracts';
 import express, { type Express, type RequestHandler } from 'express';
 
 import type { CampaignScheduler } from './modules/campaigns/campaign-scheduler.js';
+import type { EmailSearchService } from '@reachinbox/search';
 import {
   createSchedulingRouter,
   schedulingUploadErrorHandler,
 } from './modules/campaigns/scheduling-router.js';
 import { BULL_BOARD_PATH, createBullBoardRouter } from './queue/bull-board.js';
+import { createEmailSearchRouter } from './modules/emails/search-router.js';
 import type { EmailQueue } from './queue/email-queue.js';
 
 export interface AppDependencies {
   emailQueue?: EmailQueue;
   campaignScheduler?: CampaignScheduler;
+  emailSearch?: Pick<EmailSearchService, 'search'>;
   authenticationMiddleware?: RequestHandler | undefined;
   logger?: { error(bindings: Record<string, unknown>, message: string): void };
 }
@@ -19,6 +22,7 @@ export interface AppDependencies {
 export function createApp({
   emailQueue,
   campaignScheduler,
+  emailSearch,
   authenticationMiddleware,
   logger = { error: () => undefined },
 }: AppDependencies = {}): Express {
@@ -41,6 +45,17 @@ export function createApp({
       }),
     );
     app.use(schedulingUploadErrorHandler());
+  }
+
+  if (emailSearch) {
+    app.use(
+      '/api/v1/emails/search',
+      createEmailSearchRouter({
+        search: emailSearch,
+        authenticate: authenticationMiddleware,
+        logger,
+      }),
+    );
   }
 
   if (emailQueue) {

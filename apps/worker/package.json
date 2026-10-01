@@ -12,11 +12,12 @@
     "test:run": "vitest run",
     "reconcile:queue": "tsx src/reconcile-queue.ts",
     "verify:ethereal": "tsx src/verify-ethereal.ts",
-    "pretest": "pnpm --filter @reachinbox/shared build",
-    "pretest:run": "pnpm --filter @reachinbox/shared build"
+    "pretest": "pnpm --filter @reachinbox/shared build && pnpm --filter @reachinbox/search build",
+    "pretest:run": "pnpm --filter @reachinbox/shared build && pnpm --filter @reachinbox/search build"
   },
   "dependencies": {
     "@prisma/client": "6.15.0",
+    "@reachinbox/search": "workspace:*",
     "@reachinbox/shared": "workspace:*",
     "bullmq": "6.3.11",
     "dotenv": "17.2.1",

@@ -1,5 +1,7 @@
 import { createServer } from 'node:http';
 
+import { createElasticsearchClient, EmailSearchService } from '@reachinbox/search';
+
 import { createApp } from './app.js';
 import { parseApiConfig } from './config/env.js';
 import { loadRootEnvironment } from './config/load-env.js';
@@ -15,12 +17,15 @@ loadRootEnvironment();
 const config = parseApiConfig(process.env);
 const logger = createLogger(config);
 const prisma = createPrismaClient(config.DATABASE_URL);
+const elasticsearch = createElasticsearchClient(config);
+const emailSearch = new EmailSearchService({ client: elasticsearch, prisma });
 const emailQueueProducer = new EmailQueueProducer({ redisUrl: config.REDIS_URL, logger });
 const campaignScheduler = new CampaignScheduler({
   prisma,
   producer: emailQueueProducer,
   limits: config,
   logger,
+  searchProjection: emailSearch,
 });
 const authenticationMiddleware = createDevelopmentPrincipalMiddleware(
   config.NODE_ENV,
@@ -30,6 +35,7 @@ const server = createServer(
   createApp({
     emailQueue: emailQueueProducer.queue,
     campaignScheduler,
+    emailSearch,
     authenticationMiddleware,
     logger,
   }),
@@ -38,6 +44,7 @@ const shutdownManager = new ShutdownManager();
 
 shutdownManager.register(() => emailQueueProducer.close());
 shutdownManager.register(() => prisma.$disconnect());
+shutdownManager.register(() => elasticsearch.close());
 shutdownManager.register(
   () =>
     new Promise<void>((resolve, reject) => {

@@ -33,13 +33,17 @@ const testAuthentication: RequestHandler = (_request, response, next) => {
   next();
 };
 
-function createTestApp(queueProducer: Pick<EmailQueueProducer, 'enqueueEmailJobsBulk'>) {
+function createTestApp(
+  queueProducer: Pick<EmailQueueProducer, 'enqueueEmailJobsBulk'>,
+  searchProjection = { indexCampaign: vi.fn().mockResolvedValue({ indexed: 0, failures: [] }) },
+) {
   const scheduler = new CampaignScheduler({
     prisma,
     producer: queueProducer,
     limits,
     logger,
     now: () => fixedNow,
+    searchProjection,
   });
   return createApp({
     campaignScheduler: scheduler,
@@ -325,6 +329,28 @@ describe('POST /api/v1/campaigns', () => {
     expect(await prisma.campaign.count()).toBe(1);
     expect(await prisma.email.count()).toBe(2);
     expect(await producer.queue.getJobCountByTypes('waiting', 'delayed')).toBe(2);
+  });
+
+  it('keeps committed rows and queue jobs when Elasticsearch projection fails', async () => {
+    const { user, sender } = await createUserAndSender();
+    authenticatedUserId = user.id;
+    const projection = { indexCampaign: vi.fn().mockRejectedValue(new Error('ES unavailable')) };
+
+    const response = await scheduleRequest(
+      createTestApp(producer, projection),
+      sender.id,
+      'search-failure',
+    ).expect(202);
+
+    expect(response.body.campaignId).toEqual(expect.any(String));
+    expect(await prisma.campaign.count()).toBe(1);
+    expect(await prisma.email.count()).toBe(2);
+    expect(await producer.queue.getJobCountByTypes('waiting', 'delayed')).toBe(2);
+    expect(projection.indexCampaign).toHaveBeenCalledWith(response.body.campaignId);
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'index-campaign' }),
+      expect.stringContaining('Elasticsearch'),
+    );
   });
 
   it('uses PostgreSQL idempotency for concurrent identical HTTP requests', async () => {

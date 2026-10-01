@@ -9,6 +9,11 @@ const infrastructureFieldsSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: connectionUrl(['postgres:', 'postgresql:']),
   REDIS_URL: connectionUrl(['redis:', 'rediss:']),
+  ELASTICSEARCH_URL: connectionUrl(['http:', 'https:']),
+  ELASTICSEARCH_API_KEY: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().min(1).optional(),
+  ),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 

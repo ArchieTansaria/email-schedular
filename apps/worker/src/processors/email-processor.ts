@@ -1,4 +1,5 @@
 import { EmailStatus, type PrismaClient } from '@prisma/client';
+import type { EmailSearchProjection } from '@reachinbox/search';
 import { SEND_EMAIL_JOB_NAME } from '@reachinbox/shared/queue';
 import { DelayedError, type Job } from 'bullmq';
 import { z } from 'zod';
@@ -47,6 +48,7 @@ export interface EmailProcessorOptions {
     maxEmailsPerHourPerSender: number;
   };
   logger: ProcessorLogger;
+  searchProjection?: Pick<EmailSearchProjection, 'projectEmail'>;
   now?: () => Date;
 }
 
@@ -56,6 +58,7 @@ export class EmailProcessor {
   readonly #sendPermitGate: SendPermitGate;
   readonly #platformLimits: EmailProcessorOptions['platformLimits'];
   readonly #logger: ProcessorLogger;
+  readonly #searchProjection: Pick<EmailSearchProjection, 'projectEmail'>;
   readonly #now: () => Date;
 
   constructor({
@@ -64,6 +67,7 @@ export class EmailProcessor {
     sendPermitGate,
     platformLimits,
     logger,
+    searchProjection = { projectEmail: async () => false },
     now = () => new Date(),
   }: EmailProcessorOptions) {
     this.#prisma = prisma;
@@ -71,6 +75,7 @@ export class EmailProcessor {
     this.#sendPermitGate = sendPermitGate;
     this.#platformLimits = platformLimits;
     this.#logger = logger;
+    this.#searchProjection = searchProjection;
     this.#now = now;
   }
 
@@ -102,6 +107,7 @@ export class EmailProcessor {
       if (!claimed) return { outcome: 'claim-lost' };
       const error = new DefinitiveDeliveryError('Sender is inactive');
       await this.#markFailed(emailId, 'Sender is inactive');
+      await this.#projectSafely(emailId);
       throw error;
     }
 
@@ -164,6 +170,7 @@ export class EmailProcessor {
             ? 'No Ethereal account is configured for this sender'
             : error.message;
         await this.#markFailed(emailId, failureReason);
+        await this.#projectSafely(emailId);
         throw error;
       }
 
@@ -172,6 +179,7 @@ export class EmailProcessor {
           ? error
           : new AmbiguousDeliveryError('SMTP delivery outcome is uncertain', error);
       await this.#recordAmbiguousOutcome(emailId);
+      await this.#projectSafely(emailId);
       this.#logger.error(
         { error: ambiguous, jobId: job.id, emailId },
         'SMTP outcome is ambiguous; Email remains PROCESSING',
@@ -209,6 +217,8 @@ export class EmailProcessor {
       throw new AmbiguousDeliveryError('SMTP accepted but database finalization failed', error);
     }
 
+    await this.#projectSafely(emailId);
+
     return { outcome: 'sent' };
   }
 
@@ -244,6 +254,7 @@ export class EmailProcessor {
       'Email throttled and returning to delayed queue',
     );
     await job.moveToDelayed(permit.retryAt.getTime(), job.token);
+    await this.#projectSafely(emailId);
     throw new DelayedError();
   }
 
@@ -259,6 +270,17 @@ export class EmailProcessor {
       where: { id: emailId, status: EmailStatus.PROCESSING },
       data: { failureReason: 'SMTP outcome is uncertain; automatic resend disabled' },
     });
+  }
+
+  async #projectSafely(emailId: string): Promise<void> {
+    try {
+      await this.#searchProjection.projectEmail(emailId);
+    } catch (error) {
+      this.#logger.error(
+        { error, emailId, operation: 'project-email' },
+        'Elasticsearch projection failed after durable Email state change',
+      );
+    }
   }
 }
 

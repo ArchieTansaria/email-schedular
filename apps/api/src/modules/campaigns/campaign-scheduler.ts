@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { makeEmailJobId } from '@reachinbox/shared/queue';
+import type { EmailSearchProjection } from '@reachinbox/search';
 import { EmailStatus, Prisma, type PrismaClient } from '@prisma/client';
 
 import type { EnqueueEmailJobInput } from '../../queue/email-queue.js';
@@ -30,6 +31,7 @@ export interface CampaignSchedulerOptions {
   producer: EmailJobProducer;
   limits: SchedulingLimits;
   logger: SchedulerLogger;
+  searchProjection?: Pick<EmailSearchProjection, 'indexCampaign'>;
   now?: () => Date;
   generateEmailId?: () => string;
 }
@@ -55,6 +57,7 @@ export class CampaignScheduler {
   readonly #producer: EmailJobProducer;
   readonly #limits: SchedulingLimits;
   readonly #logger: SchedulerLogger;
+  readonly #searchProjection: Pick<EmailSearchProjection, 'indexCampaign'>;
   readonly #now: () => Date;
   readonly #generateEmailId: () => string;
 
@@ -63,6 +66,7 @@ export class CampaignScheduler {
     producer,
     limits,
     logger,
+    searchProjection = { indexCampaign: async () => ({ indexed: 0, failures: [] }) },
     now = () => new Date(),
     generateEmailId = randomUUID,
   }: CampaignSchedulerOptions) {
@@ -70,6 +74,7 @@ export class CampaignScheduler {
     this.#producer = producer;
     this.#limits = limits;
     this.#logger = logger;
+    this.#searchProjection = searchProjection;
     this.#now = now;
     this.#generateEmailId = generateEmailId;
   }
@@ -92,6 +97,15 @@ export class CampaignScheduler {
         'Campaign persisted but queue enqueue failed',
       );
       throw new CampaignEnqueueError(campaign.id, cause);
+    }
+
+    try {
+      await this.#searchProjection.indexCampaign(campaign.id);
+    } catch (error) {
+      this.#logger.error(
+        { error, campaignId: campaign.id, userId: campaign.userId, operation: 'index-campaign' },
+        'Campaign scheduled but Elasticsearch projection failed',
+      );
     }
 
     return summarizeCampaign(campaign);
