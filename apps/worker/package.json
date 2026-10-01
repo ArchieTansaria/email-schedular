@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
+    "reconcile:queue": "tsx src/reconcile-queue.ts",
     "verify:ethereal": "tsx src/verify-ethereal.ts",
     "pretest": "pnpm --filter @reachinbox/shared build",
     "pretest:run": "pnpm --filter @reachinbox/shared build"
@@ -19,6 +20,7 @@
     "@reachinbox/shared": "workspace:*",
     "bullmq": "6.3.11",
     "dotenv": "17.2.1",
+    "ioredis": "6.0.0",
     "nodemailer": "10.0.13",
     "pino": "9.9.0",
     "zod": "4.1.5"

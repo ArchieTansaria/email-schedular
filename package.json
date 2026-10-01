@@ -38,6 +38,7 @@
     "test:queue": "pnpm build:shared && pnpm --filter @reachinbox/api test:queue",
     "test:scheduling": "pnpm build:shared && pnpm --filter @reachinbox/api test:scheduling && vitest run --config prisma/vitest.config.ts tests/scheduling.integration.test.ts",
     "test:worker": "pnpm build:shared && pnpm --filter @reachinbox/worker test:run",
+    "reconcile:queue": "pnpm build:shared && pnpm --filter @reachinbox/worker reconcile:queue",
     "verify:ethereal": "pnpm build:shared && pnpm --filter @reachinbox/worker verify:ethereal",
     "pretest:db": "pnpm db:test:migrate",
     "pretest:scheduling": "pnpm db:test:migrate",

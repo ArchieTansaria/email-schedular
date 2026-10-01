@@ -5,15 +5,18 @@ const connectionUrl = (protocols: readonly string[]) =>
     message: `URL must use one of these protocols: ${protocols.join(', ')}`,
   });
 
-const workerFieldsSchema = z
-  .object({
-    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-    DATABASE_URL: connectionUrl(['postgres:', 'postgresql:']),
-    REDIS_URL: connectionUrl(['redis:', 'rediss:']),
+const infrastructureFieldsSchema = z.object({
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+  DATABASE_URL: connectionUrl(['postgres:', 'postgresql:']),
+  REDIS_URL: connectionUrl(['redis:', 'rediss:']),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+});
+
+const workerFieldsSchema = infrastructureFieldsSchema
+  .extend({
     WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(100).default(10),
-    LOG_LEVEL: z
-      .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
-      .default('info'),
+    MIN_SEND_DELAY_MS: z.coerce.number().int().min(1),
+    MAX_EMAILS_PER_HOUR_PER_SENDER: z.coerce.number().int().min(1),
     ETHEREAL_SENDER_1_USER: z.email(),
     ETHEREAL_SENDER_1_PASS: z.string().min(1),
     ETHEREAL_SENDER_2_USER: z.email(),
@@ -29,7 +32,14 @@ const workerFieldsSchema = z
   );
 
 export type WorkerConfig = z.infer<typeof workerFieldsSchema>;
+export type WorkerInfrastructureConfig = z.infer<typeof infrastructureFieldsSchema>;
 
 export function parseWorkerConfig(input: Record<string, unknown>): WorkerConfig {
   return workerFieldsSchema.parse(input);
+}
+
+export function parseWorkerInfrastructureConfig(
+  input: Record<string, unknown>,
+): WorkerInfrastructureConfig {
+  return infrastructureFieldsSchema.parse(input);
 }

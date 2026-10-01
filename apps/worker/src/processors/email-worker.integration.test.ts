@@ -11,6 +11,7 @@ import { Queue, type Job, type Worker } from 'bullmq';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEmailWorker } from '../email-worker.js';
+import type { SendPermitGate } from '../rate-limit/send-permit.js';
 import { makeSmtpMessageId } from '../smtp/message.js';
 import {
   AmbiguousDeliveryError,
@@ -101,8 +102,15 @@ function startWorker(
   emailSender: EmailSender,
   concurrency = 3,
   workerName = `worker-${workers.length + 1}`,
+  sendPermitGate: SendPermitGate = alwaysAllowPermit,
 ) {
-  const processor = new EmailProcessor({ prisma, emailSender, logger });
+  const processor = new EmailProcessor({
+    prisma,
+    emailSender,
+    sendPermitGate,
+    platformLimits: { minSendDelayMs: 1, maxEmailsPerHourPerSender: 1_000 },
+    logger,
+  });
   const worker = createEmailWorker({
     redisUrl,
     concurrency,
@@ -114,6 +122,16 @@ function startWorker(
   workers.push(worker);
   return worker;
 }
+
+const alwaysAllowPermit: SendPermitGate = {
+  acquire: async ({ now, delayMs }) => ({
+    allowed: true,
+    count: 1,
+    limitReachedThisReservation: false,
+    hourWindow: now.toISOString().slice(0, 13),
+    nextAllowedAt: new Date(now.getTime() + delayMs),
+  }),
+};
 
 function waitForJobs(
   workerSet: readonly Worker<SendEmailJobData>[],

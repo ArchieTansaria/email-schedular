@@ -160,6 +160,9 @@ importers:
       dotenv:
         specifier: 17.2.1
         version: 17.2.1
+      ioredis:
+        specifier: 6.0.0
+        version: 6.0.0
       nodemailer:
         specifier: 10.0.13
         version: 10.0.13

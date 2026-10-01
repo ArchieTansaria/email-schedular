@@ -1,8 +1,10 @@
 import { EmailStatus, type PrismaClient } from '@prisma/client';
 import { SEND_EMAIL_JOB_NAME } from '@reachinbox/shared/queue';
-import type { Job } from 'bullmq';
+import { DelayedError, type Job } from 'bullmq';
 import { z } from 'zod';
 
+import { getEffectiveSendLimits } from '../rate-limit/effective-limits.js';
+import type { SendPermitGate } from '../rate-limit/send-permit.js';
 import { makeSmtpMessageId } from '../smtp/message.js';
 import {
   AmbiguousDeliveryError,
@@ -39,6 +41,11 @@ export interface EmailJobResult {
 export interface EmailProcessorOptions {
   prisma: PrismaClient;
   emailSender: EmailSender;
+  sendPermitGate: SendPermitGate;
+  platformLimits: {
+    minSendDelayMs: number;
+    maxEmailsPerHourPerSender: number;
+  };
   logger: ProcessorLogger;
   now?: () => Date;
 }
@@ -46,17 +53,30 @@ export interface EmailProcessorOptions {
 export class EmailProcessor {
   readonly #prisma: PrismaClient;
   readonly #emailSender: EmailSender;
+  readonly #sendPermitGate: SendPermitGate;
+  readonly #platformLimits: EmailProcessorOptions['platformLimits'];
   readonly #logger: ProcessorLogger;
   readonly #now: () => Date;
 
-  constructor({ prisma, emailSender, logger, now = () => new Date() }: EmailProcessorOptions) {
+  constructor({
+    prisma,
+    emailSender,
+    sendPermitGate,
+    platformLimits,
+    logger,
+    now = () => new Date(),
+  }: EmailProcessorOptions) {
     this.#prisma = prisma;
     this.#emailSender = emailSender;
+    this.#sendPermitGate = sendPermitGate;
+    this.#platformLimits = platformLimits;
     this.#logger = logger;
     this.#now = now;
   }
 
-  async process(job: Pick<Job<unknown>, 'id' | 'name' | 'data'>): Promise<EmailJobResult> {
+  async process(
+    job: Pick<Job<unknown>, 'id' | 'name' | 'data' | 'token' | 'moveToDelayed'>,
+  ): Promise<EmailJobResult> {
     const emailId = validateJob(job);
     const email = await this.#prisma.email.findUnique({
       where: { id: emailId },
@@ -77,16 +97,52 @@ export class EmailProcessor {
       return { outcome: existingOutcome };
     }
 
+    if (!email.sender.active) {
+      const claimed = await claimScheduledEmail(this.#prisma, emailId);
+      if (!claimed) return { outcome: 'claim-lost' };
+      const error = new DefinitiveDeliveryError('Sender is inactive');
+      await this.#markFailed(emailId, 'Sender is inactive');
+      throw error;
+    }
+
+    const effectiveLimits = getEffectiveSendLimits(email.campaign, this.#platformLimits);
+    let permit;
+    try {
+      permit = await this.#sendPermitGate.acquire({
+        senderId: email.senderId,
+        now: this.#now(),
+        delayMs: effectiveLimits.delayMs,
+        hourlyLimit: effectiveLimits.hourlyLimit,
+      });
+    } catch (error) {
+      this.#logger.error(
+        { error, jobId: job.id, emailId, senderId: email.senderId },
+        'Send permit check failed; Email remains SCHEDULED',
+      );
+      throw error;
+    }
+
+    if (!permit.allowed) {
+      return this.#rescheduleBlockedJob(job, emailId, email.senderId, permit);
+    }
+
+    this.#logger.info(
+      {
+        jobId: job.id,
+        emailId,
+        senderId: email.senderId,
+        hourWindow: permit.hourWindow,
+        reservationCount: permit.count,
+        hourlyLimit: effectiveLimits.hourlyLimit,
+        limitReachedThisReservation: permit.limitReachedThisReservation,
+      },
+      'Send permit reserved',
+    );
+
     const claimed = await claimScheduledEmail(this.#prisma, emailId);
     if (!claimed) {
       this.#logger.info({ jobId: job.id, emailId }, 'Email claim was won by another execution');
       return { outcome: 'claim-lost' };
-    }
-
-    if (!email.sender.active) {
-      const error = new DefinitiveDeliveryError('Sender is inactive');
-      await this.#markFailed(emailId, 'Sender is inactive');
-      throw error;
     }
 
     const deliveryInput: DeliveryInput = {
@@ -154,6 +210,41 @@ export class EmailProcessor {
     }
 
     return { outcome: 'sent' };
+  }
+
+  async #rescheduleBlockedJob(
+    job: Pick<Job<unknown>, 'id' | 'token' | 'moveToDelayed'>,
+    emailId: string,
+    senderId: string,
+    permit: Extract<Awaited<ReturnType<SendPermitGate['acquire']>>, { allowed: false }>,
+  ): Promise<never | EmailJobResult> {
+    if (!job.token) throw new Error('Active BullMQ job is missing its lock token');
+
+    const updated = await this.#prisma.email.updateMany({
+      where: { id: emailId, status: EmailStatus.SCHEDULED },
+      data: { scheduledAt: permit.retryAt },
+    });
+    if (updated.count !== 1) {
+      this.#logger.info(
+        { jobId: job.id, emailId },
+        'Email changed state before throttled rescheduling; job completes without SMTP',
+      );
+      return { outcome: 'claim-lost' };
+    }
+
+    this.#logger.info(
+      {
+        jobId: job.id,
+        emailId,
+        senderId,
+        reason: permit.reason,
+        retryAt: permit.retryAt,
+        hourWindow: permit.hourWindow,
+      },
+      'Email throttled and returning to delayed queue',
+    );
+    await job.moveToDelayed(permit.retryAt.getTime(), job.token);
+    throw new DelayedError();
   }
 
   async #markFailed(emailId: string, failureReason: string): Promise<void> {

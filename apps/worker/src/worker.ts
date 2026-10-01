@@ -5,6 +5,8 @@ import { createPrismaClient } from './config/prisma.js';
 import { createEmailWorker } from './email-worker.js';
 import { ShutdownManager } from './lifecycle.js';
 import { EmailProcessor } from './processors/email-processor.js';
+import { createLimiterRedisClient, RedisSendPermitGate } from './rate-limit/send-permit.js';
+import { createRecoveryQueue, QueueReconciler } from './reconciliation/queue-reconciler.js';
 import { EtherealEmailSender, getEtherealAccounts } from './smtp/ethereal-email-sender.js';
 
 loadRootEnvironment();
@@ -13,19 +15,18 @@ const config = parseWorkerConfig(process.env);
 const logger = createLogger(config);
 const prisma = createPrismaClient(config.DATABASE_URL);
 const emailSender = new EtherealEmailSender(getEtherealAccounts(config));
-const processor = new EmailProcessor({ prisma, emailSender, logger });
-const worker = createEmailWorker({
-  redisUrl: config.REDIS_URL,
-  concurrency: config.WORKER_CONCURRENCY,
-  processor,
-  logger,
-});
+const limiterRedis = createLimiterRedisClient(config.REDIS_URL);
+const recoveryQueue = createRecoveryQueue(config.REDIS_URL);
+const sendPermitGate = new RedisSendPermitGate(limiterRedis);
 const shutdownManager = new ShutdownManager();
 
-// Reverse cleanup order is Worker (waits for active jobs), Prisma, then SMTP transports.
+// Later registrations close first. The Worker is registered after startup reconciliation.
 shutdownManager.register(() => emailSender.close());
 shutdownManager.register(() => prisma.$disconnect());
-shutdownManager.register(() => worker.close());
+shutdownManager.register(async () => {
+  await limiterRedis.quit();
+});
+shutdownManager.register(() => recoveryQueue.close());
 
 let shuttingDown = false;
 
@@ -50,6 +51,34 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 try {
+  await prisma.$connect();
+  await limiterRedis.ping();
+  await recoveryQueue.waitUntilReady();
+
+  const reconciliation = await new QueueReconciler({
+    prisma,
+    queue: recoveryQueue,
+    logger,
+  }).reconcile();
+  logger.info({ reconciliation }, 'Startup queue reconciliation finished');
+
+  const processor = new EmailProcessor({
+    prisma,
+    emailSender,
+    sendPermitGate,
+    platformLimits: {
+      minSendDelayMs: config.MIN_SEND_DELAY_MS,
+      maxEmailsPerHourPerSender: config.MAX_EMAILS_PER_HOUR_PER_SENDER,
+    },
+    logger,
+  });
+  const worker = createEmailWorker({
+    redisUrl: config.REDIS_URL,
+    concurrency: config.WORKER_CONCURRENCY,
+    processor,
+    logger,
+  });
+  shutdownManager.register(() => worker.close());
   await worker.waitUntilReady();
   logger.info({ concurrency: config.WORKER_CONCURRENCY }, 'Email Worker ready and consuming jobs');
 } catch (error) {
