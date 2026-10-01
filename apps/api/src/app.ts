@@ -11,32 +11,62 @@ import {
 import { BULL_BOARD_PATH, createBullBoardRouter } from './queue/bull-board.js';
 import { createEmailSearchRouter } from './modules/emails/search-router.js';
 import type { EmailQueue } from './queue/email-queue.js';
+import { requireAuthenticatedPrincipal } from './middleware/authenticated-principal.js';
 
 export interface AppDependencies {
   emailQueue?: EmailQueue;
   campaignScheduler?: CampaignScheduler;
   emailSearch?: Pick<EmailSearchService, 'search'>;
+  sessionMiddleware?: RequestHandler;
   authenticationMiddleware?: RequestHandler | undefined;
   logger?: { error(bindings: Record<string, unknown>, message: string): void };
   slackRouter?: Router;
+  authRouter?: Router;
+  trustProxy?: boolean;
 }
 
 export function createApp({
   emailQueue,
   campaignScheduler,
   emailSearch,
+  sessionMiddleware,
   authenticationMiddleware,
   logger = { error: () => undefined },
   slackRouter,
+  authRouter,
+  trustProxy = false,
 }: AppDependencies = {}): Express {
   const app = express();
 
   app.disable('x-powered-by');
+  if (trustProxy) app.set('trust proxy', 1);
+  if (sessionMiddleware) {
+    app.use((request, response, next) => {
+      sessionMiddleware(request, response, (error?: unknown) => {
+        if (!error) {
+          next();
+          return;
+        }
+        logger.error(
+          {
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+            operation: 'session-load',
+          },
+          'Session infrastructure unavailable',
+        );
+        response.status(503).json({
+          error: { code: 'AUTH_UNAVAILABLE', message: 'Authentication is temporarily unavailable' },
+        });
+      });
+    });
+  }
   app.use(express.json({ limit: '1mb' }));
 
   app.get('/api/health', (_request, response) => {
     response.status(200).json(createHealthResponse());
   });
+
+  if (authRouter) app.use('/api/v1/auth', authRouter);
 
   if (campaignScheduler) {
     app.use(
@@ -62,7 +92,12 @@ export function createApp({
   }
 
   if (emailQueue) {
-    app.use(BULL_BOARD_PATH, createBullBoardRouter(emailQueue));
+    app.use(
+      BULL_BOARD_PATH,
+      ...(authenticationMiddleware ? [authenticationMiddleware] : []),
+      requireAuthenticatedPrincipal,
+      createBullBoardRouter(emailQueue),
+    );
   }
 
   if (slackRouter) app.use('/api/v1/integrations/slack', slackRouter);

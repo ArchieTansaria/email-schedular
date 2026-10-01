@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import type { RequestHandler } from 'express';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -22,8 +23,19 @@ afterAll(async () => {
 });
 
 describe('Bull Board', () => {
-  it('serves the queue dashboard from the API', async () => {
-    const app = createApp({ emailQueue: producer.queue });
+  it('denies unauthenticated access and serves the dashboard to an authenticated principal', async () => {
+    await request(createApp({ emailQueue: producer.queue }))
+      .get('/admin/queues/')
+      .expect(401);
+
+    const authenticate: RequestHandler = (_request, response, next) => {
+      response.locals.principal = { userId: randomUUID() };
+      next();
+    };
+    const app = createApp({
+      emailQueue: producer.queue,
+      authenticationMiddleware: authenticate,
+    });
     const response = await request(app).get('/admin/queues/');
     const queuesResponse = await request(app).get('/admin/queues/api/queues');
 

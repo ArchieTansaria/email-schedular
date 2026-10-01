@@ -1,8 +1,8 @@
 # ReachInbox Email Scheduler
 
-Production-oriented email scheduling assignment with its Phase 0 foundation and Phase 1 relational domain model complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
+Production-oriented email scheduling assignment with backend Phases 0–6C complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
 
-The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis permit, atomic PostgreSQL claims, configured Ethereal SMTP accounts, startup queue reconciliation, and a rebuildable Elasticsearch email projection. Real Google authentication, Slack, and non-search read APIs begin in later phases.
+The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis permit, atomic PostgreSQL claims, configured Ethereal SMTP accounts, startup queue reconciliation, and a rebuildable Elasticsearch email projection. Real Google OIDC login uses Redis-backed application sessions; real Slack OAuth provides live rate-limit alerts. Non-search read APIs and the assignment dashboard remain pending.
 
 ## Architecture
 
@@ -37,7 +37,7 @@ pnpm prisma:generate
 pnpm infra:up
 ```
 
-The checked-in example contains safe local infrastructure URLs and development-only placeholders. Add two stable Ethereal accounts before starting the Worker; OAuth values remain empty until those features are implemented. Never commit `.env` or real credentials.
+The checked-in example contains safe local infrastructure URLs and empty provider placeholders. Configure Google before starting the API and add two stable Ethereal accounts before starting the Worker. Slack remains optional until its integration is used. Never commit `.env` or real credentials.
 
 ## Development commands
 
@@ -58,6 +58,8 @@ pnpm dev
 Default local URLs:
 
 - API health: `http://localhost:4000/api/health`
+- Google login: `http://localhost:4000/api/v1/auth/google`
+- Current session: `http://localhost:4000/api/v1/auth/me`
 - Web: `http://localhost:5173`
 - PostgreSQL: `localhost:5432`
 - Redis: `localhost:6379`
@@ -130,7 +132,7 @@ pnpm infra:up
 pnpm test:queue
 ```
 
-Start the API and open Bull Board at `http://localhost:4000/admin/queues`. The board is intentionally unauthenticated for local development; production protection is deferred to the authentication phase. Start `pnpm dev:worker` separately to consume eligible jobs.
+Start the API, sign in through Google, and open Bull Board at `http://localhost:4000/admin/queues`. Bull Board requires the same authenticated application session as the business APIs. Start `pnpm dev:worker` separately to consume eligible jobs.
 
 BullMQ custom IDs prevent duplicate insertion only while the prior queue job exists. PostgreSQL status is the Worker business-idempotency boundary. Startup reconciliation repairs missing or terminal queue work only while its database Email remains `SCHEDULED`.
 
@@ -170,7 +172,7 @@ The command prints each returned Message-ID and Nodemailer-generated preview URL
 ### Manual Phase 4 verification
 
 1. Put two Ethereal username/password pairs in `.env`.
-2. Run `pnpm exec prisma studio`; create or update two active Sender rows so each `fromEmail` matches one configured Ethereal username. Ensure both belong to the development User selected by `DEV_AUTH_USER_ID`.
+2. Sign in through Google once, then run `pnpm exec prisma studio`; create or update two active Sender rows so each `fromEmail` matches one configured Ethereal username. Ensure both belong to the newly created Google-authenticated User.
 3. Start `pnpm infra:up`, then run `pnpm dev:api` and `pnpm dev:worker` in separate terminals.
 4. Submit a small campaign through `POST /api/v1/campaigns` using the curl example below, selecting either Sender and a start time a minute or two ahead.
 5. Watch the job move through Bull Board at `http://localhost:4000/admin/queues`.
@@ -228,10 +230,11 @@ Docker Redis uses AOF `everysec`, `noeviction`, and a named volume. To manually 
 
 Phase 3 accepts `multipart/form-data` at `POST /api/v1/campaigns`. The route requires an authentication middleware principal and `Idempotency-Key`, parses an in-memory CSV/TXT lead file up to 5 MB, and passes normalized scheduling intent to `CampaignScheduler`. The service verifies active sender ownership, plans ordered timestamps, atomically creates Campaign and Email rows, and then bulk-enqueues deterministic jobs.
 
-Google OAuth is not implemented yet. For manual local testing only, set `DEV_AUTH_USER_ID` to the UUID of an existing local User. This adapter is disabled in production and never accepts caller-supplied identity. With a matching active Sender UUID and a local `leads.csv`:
+Scheduling requires the Google-authenticated session; caller-supplied user IDs are ignored. With a matching active Sender UUID and a local `leads.csv`, copy the `reachinbox.sid` cookie from your own browser's localhost session for command-line verification (never share or commit it):
 
 ```bash
 curl --fail-with-body http://localhost:4000/api/v1/campaigns \
+  -H 'Cookie: reachinbox.sid=<YOUR_LOCAL_SESSION_COOKIE>' \
   -H 'Idempotency-Key: manual-schedule-1' \
   -F 'subject=Manual campaign' \
   -F 'body=Hello from the local API' \
@@ -299,7 +302,7 @@ SLACK_CALLBACK_URL=http://localhost:4000/api/v1/integrations/slack/callback
 APP_ENCRYPTION_KEY=<stable random secret of at least 32 characters>
 ```
 
-Do not use Slack's legacy custom Incoming WebHook integration. With a non-production `DEV_AUTH_USER_ID`, open `http://localhost:4000/api/v1/integrations/slack/connect`, authorize the workspace, and choose the destination channel. Safe API operations are:
+Do not use Slack's legacy custom Incoming WebHook integration. Sign in through Google, open `http://localhost:4000/api/v1/integrations/slack/connect`, authorize the workspace, and choose the destination channel. Browser requests use the same HttpOnly application session. Safe API operations are:
 
 ```bash
 curl http://localhost:4000/api/v1/integrations/slack/status
@@ -318,10 +321,52 @@ pnpm infra:up
 pnpm test:slack
 ```
 
+## Google OAuth and Redis sessions
+
+The submitted authentication path is a server-side Google OAuth/OIDC authorization-code flow. It requests only `openid email profile`, verifies Google-signed identity and the configured audience, checks a one-time state plus OIDC nonce, and uses immutable Google `sub` for `User.googleSub`. Provider access/refresh tokens are discarded because the application does not call Google APIs.
+
+Create or select a Google Cloud project, configure the OAuth consent screen, then create an OAuth Client ID of type **Web application**. Add this exact local authorized redirect URI:
+
+```text
+http://localhost:4000/api/v1/auth/google/callback
+```
+
+Configure:
+
+```env
+GOOGLE_CLIENT_ID=<web client ID>
+GOOGLE_CLIENT_SECRET=<web client secret>
+GOOGLE_CALLBACK_URL=http://localhost:4000/api/v1/auth/google/callback
+SESSION_SECRET=<independent random secret of at least 32 characters>
+FRONTEND_URL=http://localhost:5173
+```
+
+Start Redis/PostgreSQL and the API, then open:
+
+```text
+http://localhost:4000/api/v1/auth/google
+```
+
+Google returns to the fixed callback, the API upserts the local User by `googleSub`, rotates the pre-login session ID, stores only `userId` in Redis, and redirects to the configured frontend URL. The `reachinbox.sid` browser cookie is opaque, `HttpOnly`, `SameSite=Lax`, scoped to `/`, and expires after 24 hours. It is `Secure` in production. Redis keys use the isolated `session:` prefix and have the same bounded lifetime.
+
+Verify the session and logout with credentialed browser requests:
+
+```bash
+curl -H 'Cookie: reachinbox.sid=<YOUR_LOCAL_SESSION_COOKIE>' \
+  http://localhost:4000/api/v1/auth/me
+
+curl -X POST -H 'Cookie: reachinbox.sid=<YOUR_LOCAL_SESSION_COOKIE>' \
+  http://localhost:4000/api/v1/auth/logout
+```
+
+After logout, `/api/v1/auth/me` returns `401`. Restarting the API does not invalidate a live session because session state is in Redis. Production sets Express `trust proxy` to one hop for Render's HTTPS reverse proxy and serves the frontend/API from one origin; no wildcard credentialed CORS policy is enabled. Add the exact deployed HTTPS callback to the same Google web client before deployment.
+
+Google email is not used to auto-link accounts. A first real login may create a different User from an old development fixture even if the email matches. Create Sender rows owned by the real authenticated User; do not weaken sender ownership or manually transfer history without an explicit migration decision.
+
 ## Environment model
 
-Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. SMTP values remain optional for unrelated processes but are required by worker-specific parsing. `ELASTICSEARCH_API_KEY` remains optional for local development and supports managed Elasticsearch. OAuth credentials remain optional until their phases.
+Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. SMTP values remain optional for unrelated processes but are required by worker-specific parsing. `ELASTICSEARCH_API_KEY` remains optional for local development and supports managed Elasticsearch. The API requires complete Google credentials; Slack is optional but must be configured as a complete credential/callback set when enabled.
 
 ## Phase status
 
-Phases 0–6B are complete through distributed throttling, queue recovery, Elasticsearch email search, real Slack OAuth, and live rate-limit webhook delivery. Google OAuth, non-search read APIs, and the assignment dashboard remain pending.
+Phases 0–6C are complete through distributed throttling, queue recovery, Elasticsearch email search, real Slack OAuth/live alerts, and real Google OIDC with Redis sessions. Non-search read APIs and the assignment dashboard remain pending.

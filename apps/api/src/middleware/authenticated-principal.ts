@@ -1,3 +1,4 @@
+import type { PrismaClient } from '@prisma/client';
 import type { RequestHandler } from 'express';
 
 export interface AuthenticatedPrincipal {
@@ -14,14 +15,33 @@ declare global {
   }
 }
 
-export function createDevelopmentPrincipalMiddleware(
-  nodeEnv: string,
-  userId: string | undefined,
-): RequestHandler | undefined {
-  if (nodeEnv === 'production' || !userId) return undefined;
+export function createSessionPrincipalMiddleware(
+  prisma: Pick<PrismaClient, 'user'>,
+): RequestHandler {
+  return async (request, response, next) => {
+    const userId = request.session.userId;
+    if (!userId) {
+      next();
+      return;
+    }
 
-  return (_request, response, next) => {
-    response.locals.principal = { userId };
-    next();
+    try {
+      const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+      if (user) response.locals.principal = { userId: user.id };
+      next();
+    } catch (error) {
+      next(error);
+    }
   };
 }
+
+export const requireAuthenticatedPrincipal: RequestHandler = (_request, response, next) => {
+  if (response.locals.principal) {
+    next();
+    return;
+  }
+
+  response
+    .status(401)
+    .json({ error: { code: 'UNAUTHENTICATED', message: 'Authentication required' } });
+};
