@@ -42,7 +42,7 @@ function renderCompose() {
 async function fillValidForm() {
   const file = new File(['alice@example.com\nbob@example.com'], 'leads.csv', { type: 'text/csv' });
   mockedParser.mockResolvedValue({ file, recipients: ['alice@example.com', 'bob@example.com'] });
-  fireEvent.change(await screen.findByLabelText('⇧ Upload List'), { target: { files: [file] } });
+  fireEvent.change(await screen.findByLabelText('Upload List'), { target: { files: [file] } });
   expect(await screen.findByText(/2 unique valid recipients/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Campaign subject' } });
   fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Campaign body' } });
@@ -65,7 +65,7 @@ describe('ComposePage', () => {
   it('shows the no-sender state and disables scheduling', async () => {
     mockedApi.senders.mockResolvedValue({ items: [] });
     renderCompose();
-    expect(await screen.findByText(/No active sender/)).toBeInTheDocument();
+    expect(await screen.findByText(/No configured sender/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Schedule' })).toBeDisabled();
   });
 

@@ -81,7 +81,7 @@ describe('application routes and dashboard', () => {
   it('guards protected routes and exposes the real Google login action', async () => {
     mockedApi.me.mockRejectedValue(new ApiError(401, 'UNAUTHENTICATED', 'Authentication required'));
     renderApp('/');
-    expect(await screen.findByRole('link', { name: /continue with google/i })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: /login with google/i })).toHaveAttribute(
       'href',
       '/api/v1/auth/google',
     );

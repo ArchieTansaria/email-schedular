@@ -5,6 +5,7 @@ import { Router, type Request, type RequestHandler } from 'express';
 
 import { requireAuthenticatedPrincipal } from '../../middleware/authenticated-principal.js';
 import type { GoogleOAuthProvider } from './google-oauth.js';
+import type { SenderProvisioner } from './sender-provisioner.js';
 import { SESSION_COOKIE_NAME } from './session.js';
 
 const OAUTH_ATTEMPT_TTL_MS = 10 * 60 * 1_000;
@@ -20,6 +21,7 @@ export function createAuthRouter(options: {
   frontendUrl: string;
   production: boolean;
   logger: AuthLogger;
+  senderProvisioner?: Pick<SenderProvisioner, 'ensureForUser'>;
   now?: () => number;
 }): Router {
   const router = Router();
@@ -88,8 +90,10 @@ export function createAuthRouter(options: {
           name: identity.name,
           avatarUrl: identity.avatarUrl,
         },
-        select: { id: true },
+        select: { id: true, name: true },
       });
+
+      await options.senderProvisioner?.ensureForUser(user);
 
       await regenerateSession(request);
       request.session.userId = user.id;

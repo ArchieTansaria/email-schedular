@@ -1,5 +1,6 @@
 import { createHealthResponse } from '@reachinbox/shared/contracts';
 import express, { type Express, type RequestHandler } from 'express';
+import { join } from 'node:path';
 
 import type { CampaignScheduler } from './modules/campaigns/campaign-scheduler.js';
 import type { EmailSearchService } from '@reachinbox/search';
@@ -28,6 +29,7 @@ export interface AppDependencies {
   authRouter?: Router;
   trustProxy?: boolean;
   prisma?: PrismaClient;
+  webDistPath?: string;
 }
 
 export function createApp({
@@ -41,6 +43,7 @@ export function createApp({
   authRouter,
   trustProxy = false,
   prisma,
+  webDistPath,
 }: AppDependencies = {}): Express {
   const app = express();
 
@@ -121,6 +124,32 @@ export function createApp({
   }
 
   if (slackRouter) app.use('/api/v1/integrations/slack', slackRouter);
+
+  app.use('/api', (_request, response) => {
+    response.status(404).json({ error: { code: 'NOT_FOUND', message: 'API route not found' } });
+  });
+
+  app.use('/admin', (_request, response) => {
+    response.status(404).type('text/plain').send('Admin route not found');
+  });
+
+  if (webDistPath) {
+    app.use(express.static(webDistPath, { index: false }));
+    app.use((request, response, next) => {
+      if (
+        !['GET', 'HEAD'].includes(request.method) ||
+        !request.accepts('html') ||
+        request.path.startsWith('/api/') ||
+        request.path.startsWith('/admin/')
+      ) {
+        next();
+        return;
+      }
+      response.sendFile(join(webDistPath, 'index.html'), (error) => {
+        if (error) next(error);
+      });
+    });
+  }
 
   return app;
 }

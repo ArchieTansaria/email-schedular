@@ -35,6 +35,7 @@ const googleConfigurationSchema = z
 
 const apiFieldsSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
+  HOST: z.string().min(1).default('0.0.0.0'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   FRONTEND_URL: z.url().default('http://localhost:5173'),
 });

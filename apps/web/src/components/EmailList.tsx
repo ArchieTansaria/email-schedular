@@ -67,20 +67,22 @@ export function EmailList({
           const time = mode === 'sent' ? item.sentAt : item.scheduledAt;
           return (
             <Link className="email-row" key={id} to={`/emails/${id}`}>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-slate-800">
-                  To: {item.recipientEmail}
-                </p>
-                <p className="mt-1 truncate text-xs text-slate-400">{bodyPreview}</p>
+              <div className="email-recipient min-w-0">
+                <p className="truncate">To: {item.recipientEmail}</p>
               </div>
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-slate-800">{item.subject}</p>
+              <div className="email-meta">
+                <StatusBadge status={item.status as EmailLifecycleStatus} />
+                <time>{formatDateTime(time)}</time>
+              </div>
+              <div className="email-content min-w-0">
+                <p className="truncate">
+                  <strong>{item.subject}</strong>
+                  <span> — {bodyPreview}</span>
+                </p>
                 {item.status === 'FAILED' && item.failureReason ? (
-                  <p className="mt-1 truncate text-xs text-red-500">{item.failureReason}</p>
+                  <p className="email-failure truncate">{item.failureReason}</p>
                 ) : null}
               </div>
-              <time className="text-xs text-slate-500">{formatDateTime(time)}</time>
-              <StatusBadge status={item.status as EmailLifecycleStatus} />
             </Link>
           );
         })}

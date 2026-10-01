@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { fileURLToPath } from 'node:url';
 
 import { createElasticsearchClient, EmailSearchService } from '@reachinbox/search';
 import {
@@ -18,6 +19,7 @@ import { ShutdownManager } from './lifecycle.js';
 import { createSessionPrincipalMiddleware } from './middleware/authenticated-principal.js';
 import { createAuthRouter } from './modules/auth/auth-router.js';
 import { GoogleOAuthClient } from './modules/auth/google-oauth.js';
+import { SenderProvisioner } from './modules/auth/sender-provisioner.js';
 import { createRedisSessionInfrastructure } from './modules/auth/session.js';
 import { CampaignScheduler } from './modules/campaigns/campaign-scheduler.js';
 import { createSlackRouter } from './modules/slack/slack-router.js';
@@ -32,6 +34,9 @@ if (!config.GOOGLE_CLIENT_ID || !config.GOOGLE_CLIENT_SECRET || !config.GOOGLE_C
   throw new Error(
     'Google OAuth is required: configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_CALLBACK_URL',
   );
+}
+if (!config.ETHEREAL_SENDER_1_USER || !config.ETHEREAL_SENDER_2_USER) {
+  throw new Error('Sender provisioning requires ETHEREAL_SENDER_1_USER and ETHEREAL_SENDER_2_USER');
 }
 const sessionInfrastructure = await createRedisSessionInfrastructure({
   redisUrl: config.REDIS_URL,
@@ -50,6 +55,10 @@ const authRouter = createAuthRouter({
   frontendUrl: config.FRONTEND_URL,
   production: config.NODE_ENV === 'production',
   logger,
+  senderProvisioner: new SenderProvisioner({
+    prisma,
+    senderEmails: [config.ETHEREAL_SENDER_1_USER, config.ETHEREAL_SENDER_2_USER],
+  }),
 });
 const elasticsearch = createElasticsearchClient(config);
 const emailSearch = new EmailSearchService({ client: elasticsearch, prisma });
@@ -95,6 +104,7 @@ const server = createServer(
     authRouter,
     logger,
     trustProxy: config.NODE_ENV === 'production',
+    webDistPath: fileURLToPath(new URL('../../web/dist/', import.meta.url)),
     prisma,
     ...(slackRouter ? { slackRouter } : {}),
   }),
@@ -141,6 +151,6 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
-server.listen(config.PORT, () => {
-  logger.info({ port: config.PORT }, 'API listening');
+server.listen(config.PORT, config.HOST, () => {
+  logger.info({ host: config.HOST, port: config.PORT }, 'API listening');
 });

@@ -3,6 +3,7 @@ import { type FormEvent, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { api, readableError } from '../api/client.js';
+import { Icon } from '../components/Icon.js';
 import { resolveSubmissionAttempt, type SubmissionAttempt } from '../lib/idempotency.js';
 import { parseLeadFile, type ParsedLeadFile } from '../lib/leads.js';
 import { toLocalDateTimeInput, tomorrowAt } from '../lib/time.js';
@@ -105,18 +106,70 @@ export function ComposePage() {
   return (
     <main className="compose-page">
       <header className="compose-header">
-        <Link aria-label="Back to dashboard" to="/">
-          ←
+        <Link aria-label="Back to dashboard" className="compose-back" to="/">
+          <Icon name="arrow-left" size={18} />
         </Link>
         <h1>Compose New Email</h1>
-        <button
-          className="button-primary"
-          disabled={mutation.isPending || availableSenders.length === 0}
-          form="compose-form"
-          type="submit"
-        >
-          {mutation.isPending ? 'Scheduling…' : 'Schedule'}
-        </button>
+        <div className="compose-actions">
+          <button
+            aria-expanded={showSchedule}
+            className="compose-action-icon"
+            onClick={() => setShowSchedule((shown) => !shown)}
+            type="button"
+          >
+            <Icon name="clock" size={16} />
+            <span>Send Later</span>
+          </button>
+          <button
+            className="compose-submit"
+            disabled={mutation.isPending || availableSenders.length === 0}
+            form="compose-form"
+            type="submit"
+          >
+            {mutation.isPending ? 'Scheduling…' : 'Schedule'}
+          </button>
+          {showSchedule ? (
+            <div className="schedule-popover">
+              <h2>Send Later</h2>
+              <label htmlFor="start">Pick date &amp; time</label>
+              <input
+                id="start"
+                min={toLocalDateTimeInput(new Date())}
+                onChange={(event) => setStartAt(event.target.value)}
+                type="datetime-local"
+                value={startAt}
+              />
+              <p className="schedule-label">Tomorrow</p>
+              <div className="schedule-presets">
+                {[9, 11, 15].map((hour) => (
+                  <button
+                    key={hour}
+                    onClick={() => setStartAt(toLocalDateTimeInput(tomorrowAt(hour)))}
+                    type="button"
+                  >
+                    Tomorrow,{' '}
+                    {new Intl.DateTimeFormat(undefined, {
+                      hour: 'numeric',
+                      minute: '2-digit',
+                    }).format(tomorrowAt(hour))}
+                  </button>
+                ))}
+              </div>
+              <div className="schedule-footer">
+                <button onClick={() => setShowSchedule(false)} type="button">
+                  Cancel
+                </button>
+                <button
+                  className="schedule-done"
+                  onClick={() => setShowSchedule(false)}
+                  type="button"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
       </header>
       <form className="compose-form" id="compose-form" onSubmit={(event) => void submit(event)}>
         <div className="form-row">
@@ -135,10 +188,17 @@ export function ComposePage() {
         </div>
         {senders.isPending ? (
           <p className="form-help">Loading senders…</p>
+        ) : senders.isError ? (
+          <div className="form-alert" role="alert">
+            <span>Senders could not be loaded.</span>{' '}
+            <button onClick={() => void senders.refetch()} type="button">
+              Try again
+            </button>
+          </div>
         ) : availableSenders.length === 0 ? (
           <div className="form-alert">
-            No active sender is available. Ask the administrator to configure an Ethereal-backed
-            sender.
+            No configured sender is available. Sign out and back in after checking the Ethereal
+            sender configuration.
           </div>
         ) : null}
         <div className="form-row items-start">
@@ -160,9 +220,10 @@ export function ComposePage() {
                 <span className="text-sm text-slate-400">Upload a CSV or TXT lead list</span>
               )}
               <label className="upload-link">
-                ⇧ Upload List
+                <Icon name="upload" size={13} /> Upload List
                 <input
                   accept=".csv,.txt,text/csv,text/plain"
+                  aria-label="Upload List"
                   className="sr-only"
                   onChange={(event) => void chooseFile(event.target.files?.[0])}
                   type="file"
@@ -187,7 +248,7 @@ export function ComposePage() {
           />
         </div>
         <div className="form-row compact-row">
-          <label htmlFor="delay">Delay</label>
+          <label htmlFor="delay">Delay between 2 emails</label>
           <div className="inline-field">
             <input
               id="delay"
@@ -197,7 +258,7 @@ export function ComposePage() {
               type="number"
               value={delaySeconds}
             />
-            <span>seconds between emails</span>
+            <span>seconds</span>
           </div>
           <label htmlFor="limit">Hourly limit</label>
           <input
@@ -210,60 +271,33 @@ export function ComposePage() {
             value={hourlyLimit}
           />
         </div>
-        <div className="relative mt-5 flex justify-end">
-          <button
-            className="button-secondary"
-            onClick={() => setShowSchedule((shown) => !shown)}
-            type="button"
-          >
-            ◷ Send Later
-          </button>
-          {showSchedule ? (
-            <div className="schedule-popover">
-              <h2>Send Later</h2>
-              <label htmlFor="start">Pick date &amp; time</label>
-              <input
-                id="start"
-                min={toLocalDateTimeInput(new Date())}
-                onChange={(event) => setStartAt(event.target.value)}
-                type="datetime-local"
-                value={startAt}
-              />
-              <div className="mt-3 grid gap-1">
-                {[9, 11, 15].map((hour) => (
-                  <button
-                    key={hour}
-                    onClick={() => setStartAt(toLocalDateTimeInput(tomorrowAt(hour)))}
-                    type="button"
-                  >
-                    Tomorrow,{' '}
-                    {new Intl.DateTimeFormat(undefined, {
-                      hour: 'numeric',
-                      minute: '2-digit',
-                    }).format(tomorrowAt(hour))}
-                  </button>
-                ))}
-              </div>
-              <button
-                className="button-primary mt-4 w-full"
-                onClick={() => setShowSchedule(false)}
-                type="button"
-              >
-                Done
-              </button>
-            </div>
-          ) : null}
-        </div>
-        <label className="mt-5 block text-xs font-medium text-slate-500" htmlFor="body">
-          Message
-        </label>
-        <textarea
-          className="message-editor"
-          id="body"
-          onChange={(event) => setBody(event.target.value)}
-          placeholder="Type your message…"
-          value={body}
-        />
+        <section className="editor-shell">
+          <label className="sr-only" htmlFor="body">
+            Message
+          </label>
+          <textarea
+            className="message-editor"
+            id="body"
+            onChange={(event) => setBody(event.target.value)}
+            placeholder="Start writing…"
+            value={body}
+          />
+          <span aria-hidden className="editor-placeholder">
+            Type your Reply...
+          </span>
+          <div aria-label="Formatting preview (plain text only)" className="editor-toolbar">
+            <span aria-hidden>↶</span>
+            <span aria-hidden>↷</span>
+            <span aria-hidden>Tt</span>
+            <strong aria-hidden>B</strong>
+            <em aria-hidden>I</em>
+            <u aria-hidden>U</u>
+            <span aria-hidden>≡</span>
+            <span aria-hidden>☷</span>
+            <span aria-hidden>❝</span>
+            <span className="toolbar-note">Plain text</span>
+          </div>
+        </section>
         {validationError ? (
           <p className="form-error mt-4" role="alert">
             {validationError}

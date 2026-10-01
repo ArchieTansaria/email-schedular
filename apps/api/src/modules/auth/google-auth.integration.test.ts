@@ -18,6 +18,7 @@ import { EmailQueueProducer } from '../../queue/email-queue.js';
 import { createSlackRouter } from '../slack/slack-router.js';
 import { createAuthRouter } from './auth-router.js';
 import type { GoogleIdentity, GoogleOAuthProvider } from './google-oauth.js';
+import { SenderProvisioner } from './sender-provisioner.js';
 import {
   createRedisSessionInfrastructure,
   SESSION_COOKIE_NAME,
@@ -43,6 +44,7 @@ const defaultIdentity: GoogleIdentity = {
   name: 'Auth User',
   avatarUrl: 'https://example.test/avatar.png',
 };
+const configuredSenderEmails = ['sender-one@ethereal.test', 'sender-two@ethereal.test'];
 
 let infrastructure: SessionInfrastructure;
 let identity: GoogleIdentity;
@@ -88,6 +90,7 @@ function authApp(
     frontendUrl: 'http://localhost:5173/dashboard',
     production: options.production ?? false,
     logger,
+    senderProvisioner: new SenderProvisioner({ prisma, senderEmails: configuredSenderEmails }),
     ...(options.now ? { now: options.now } : {}),
   });
   return createApp({
@@ -223,11 +226,29 @@ describe('Google OAuth and Redis sessions', () => {
     const firstAgent = request.agent(authApp());
     await login(firstAgent);
     const first = await prisma.user.findUniqueOrThrow({ where: { googleSub: identity.sub } });
+    const firstSenders = await prisma.sender.findMany({
+      where: { userId: first.id },
+      orderBy: { fromEmail: 'asc' },
+    });
+    expect(firstSenders.map((sender) => sender.fromEmail)).toEqual(configuredSenderEmails);
+
+    const manualSender = await prisma.sender.create({
+      data: {
+        userId: first.id,
+        fromName: 'Existing Manual Sender',
+        fromEmail: 'manual-sender@example.test',
+      },
+    });
 
     identity = { ...identity, name: 'Updated Name', avatarUrl: null };
     await login(request.agent(authApp()));
     const repeated = await prisma.user.findUniqueOrThrow({ where: { googleSub: identity.sub } });
     expect(repeated).toMatchObject({ id: first.id, name: 'Updated Name', avatarUrl: null });
+    expect(await prisma.sender.count({ where: { userId: first.id } })).toBe(3);
+    expect(await prisma.sender.findUnique({ where: { id: manualSender.id } })).toMatchObject({
+      fromName: 'Existing Manual Sender',
+      active: true,
+    });
 
     identity = { ...identity, sub: 'different-google-subject' };
     await login(request.agent(authApp()));

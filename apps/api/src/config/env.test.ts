@@ -24,6 +24,7 @@ describe('API environment configuration', () => {
         GOOGLE_CALLBACK_URL: 'http://localhost:4000/api/v1/auth/google/callback',
       }),
     ).toMatchObject({
+      HOST: '0.0.0.0',
       GOOGLE_CLIENT_ID: 'google-client-id',
       GOOGLE_CALLBACK_URL: 'http://localhost:4000/api/v1/auth/google/callback',
     });

@@ -6,6 +6,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, readableError } from '../api/client.js';
 import { useCurrentUser } from '../App.js';
 import { EmailList } from '../components/EmailList.js';
+import { Icon } from '../components/Icon.js';
 import { useDebouncedValue } from '../hooks/useDebouncedValue.js';
 
 type Tab = 'scheduled' | 'sent';
@@ -101,8 +102,10 @@ export function DashboardPage() {
             <p className="truncate text-sm font-semibold text-slate-800">{user.name}</p>
             <p className="truncate text-[11px] text-slate-400">{user.email}</p>
           </div>
+          <Icon name="chevron-down" size={13} />
         </div>
         <Link className="compose-button" to="/compose">
+          <Icon name="compose" size={14} />
           Compose
         </Link>
         <p className="nav-label">Core</p>
@@ -111,7 +114,9 @@ export function DashboardPage() {
           onClick={() => setParams({ tab: 'scheduled' })}
           type="button"
         >
-          <span>◷ Scheduled</span>
+          <span>
+            <Icon name="clock" size={14} /> Scheduled
+          </span>
           <span>{scheduledTotal ?? '—'}</span>
         </button>
         <button
@@ -119,15 +124,20 @@ export function DashboardPage() {
           onClick={() => setParams({ tab: 'sent' })}
           type="button"
         >
-          <span>➤ Sent</span>
+          <span>
+            <Icon name="send" size={14} /> Sent
+          </span>
           <span>{sentTotal ?? '—'}</span>
         </button>
-        <div className="mt-auto border-t border-slate-100 pt-4">
+        <div className="sidebar-footer">
           {slack.data?.connected ? (
-            <div className="rounded-xl bg-emerald-50 p-3 text-xs text-slate-700">
-              <p className="font-semibold text-emerald-700">Slack Connected</p>
-              <p className="mt-1 truncate">{slack.data.channelName}</p>
-              <div className="mt-3 flex gap-2">
+            <div className="slack-summary">
+              <div className="slack-summary-title">
+                <Icon name="slack" size={14} />
+                <span>Slack Connected</span>
+              </div>
+              <p>{slack.data.channelName}</p>
+              <div className="slack-actions">
                 <button
                   disabled={testSlack.isPending}
                   onClick={() => testSlack.mutate()}
@@ -145,30 +155,37 @@ export function DashboardPage() {
               </div>
             </div>
           ) : slack.isError ? (
-            <p className="text-xs text-slate-400">Slack is not configured.</p>
+            <p className="integration-note">Slack integration unavailable.</p>
           ) : (
             <button
-              className="button-secondary w-full"
+              className="integration-button"
               onClick={() => window.location.assign('/api/v1/integrations/slack/connect')}
               type="button"
             >
+              <Icon name="slack" size={14} />
               Connect Slack
             </button>
           )}
           <button
-            className="mt-3 w-full text-left text-xs text-slate-500 hover:text-slate-800"
+            className="logout-button"
             disabled={logout.isPending}
             onClick={() => logout.mutate()}
             type="button"
           >
+            <Icon name="logout" size={14} />
             {logout.isPending ? 'Logging out…' : 'Logout'}
           </button>
+          {testSlack.isError || disconnect.isError || logout.isError ? (
+            <p className="integration-error" role="alert">
+              {readableError(testSlack.error ?? disconnect.error ?? logout.error)}
+            </p>
+          ) : null}
         </div>
       </aside>
       <section className="min-w-0 flex-1 bg-white">
         <header className="dashboard-toolbar">
           <label className="search-box">
-            <span aria-hidden>⌕</span>
+            <Icon name="search" size={14} />
             <span className="sr-only">Search emails</span>
             <input
               onChange={(event) => setSearchText(event.target.value)}
@@ -182,7 +199,7 @@ export function DashboardPage() {
             onClick={() => (isSearching ? void search.refetch() : void activeList.refetch())}
             type="button"
           >
-            ↻
+            <Icon name="refresh" size={15} />
           </button>
         </header>
         {notice ? (
@@ -193,15 +210,8 @@ export function DashboardPage() {
             </button>
           </div>
         ) : null}
-        <div className="list-heading">
-          <div>
-            <h1>{tab === 'scheduled' ? 'Scheduled Emails' : 'Sent Emails'}</h1>
-            <p>
-              {isSearching
-                ? `${search.data?.pages[0]?.total ?? 0} search results`
-                : `${tab === 'scheduled' ? (scheduledTotal ?? 0) : (sentTotal ?? 0)} emails`}
-            </p>
-          </div>
+        <div className="list-context" aria-live="polite">
+          {isSearching ? `${search.data?.pages[0]?.total ?? 0} search results` : null}
         </div>
         <EmailList
           error={
