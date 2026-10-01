@@ -1,3 +1,6 @@
+import { createElasticsearchClient, EmailSearchService } from '@reachinbox/search';
+import { FetchSlackWebhookClient, SecretCipher, SlackRateLimitNotifier } from '@reachinbox/slack';
+
 import { parseWorkerConfig } from './config/env.js';
 import { loadRootEnvironment } from './config/load-env.js';
 import { createLogger } from './config/logger.js';
@@ -20,6 +23,12 @@ const emailSender = new EtherealEmailSender(getEtherealAccounts(config));
 const limiterRedis = createLimiterRedisClient(config.REDIS_URL);
 const recoveryQueue = createRecoveryQueue(config.REDIS_URL);
 const sendPermitGate = new RedisSendPermitGate(limiterRedis);
+const rateLimitNotifier = new SlackRateLimitNotifier({
+  prisma,
+  redis: limiterRedis,
+  cipher: new SecretCipher(config.APP_ENCRYPTION_KEY),
+  client: new FetchSlackWebhookClient(),
+});
 const shutdownManager = new ShutdownManager();
 
 // Later registrations close first. The Worker is registered after startup reconciliation.
@@ -75,6 +84,7 @@ try {
     },
     logger,
     searchProjection: emailSearch,
+    rateLimitNotifier,
   });
   const worker = createEmailWorker({
     redisUrl: config.REDIS_URL,
@@ -90,4 +100,3 @@ try {
   await shutdownManager.shutdown();
   throw error;
 }
-import { createElasticsearchClient, EmailSearchService } from '@reachinbox/search';

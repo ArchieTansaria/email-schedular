@@ -1,5 +1,6 @@
 import { EmailStatus, type PrismaClient } from '@prisma/client';
 import type { EmailSearchProjection } from '@reachinbox/search';
+import type { RateLimitNotifier } from '@reachinbox/slack';
 import { SEND_EMAIL_JOB_NAME } from '@reachinbox/shared/queue';
 import { DelayedError, type Job } from 'bullmq';
 import { z } from 'zod';
@@ -49,6 +50,7 @@ export interface EmailProcessorOptions {
   };
   logger: ProcessorLogger;
   searchProjection?: Pick<EmailSearchProjection, 'projectEmail'>;
+  rateLimitNotifier?: RateLimitNotifier;
   now?: () => Date;
 }
 
@@ -59,6 +61,7 @@ export class EmailProcessor {
   readonly #platformLimits: EmailProcessorOptions['platformLimits'];
   readonly #logger: ProcessorLogger;
   readonly #searchProjection: Pick<EmailSearchProjection, 'projectEmail'>;
+  readonly #rateLimitNotifier: RateLimitNotifier;
   readonly #now: () => Date;
 
   constructor({
@@ -68,6 +71,7 @@ export class EmailProcessor {
     platformLimits,
     logger,
     searchProjection = { projectEmail: async () => false },
+    rateLimitNotifier = { notify: async () => 'not-connected' },
     now = () => new Date(),
   }: EmailProcessorOptions) {
     this.#prisma = prisma;
@@ -76,6 +80,7 @@ export class EmailProcessor {
     this.#platformLimits = platformLimits;
     this.#logger = logger;
     this.#searchProjection = searchProjection;
+    this.#rateLimitNotifier = rateLimitNotifier;
     this.#now = now;
   }
 
@@ -129,6 +134,16 @@ export class EmailProcessor {
     }
 
     if (!permit.allowed) {
+      if (permit.reason === 'HOURLY_LIMIT') {
+        await this.#notifyRateLimitSafely({
+          userId: email.userId,
+          senderId: email.senderId,
+          senderEmail: email.sender.fromEmail,
+          hourWindow: permit.hourWindow,
+          hourlyLimit: effectiveLimits.hourlyLimit,
+          limitReachedThisReservation: true,
+        });
+      }
       return this.#rescheduleBlockedJob(job, emailId, email.senderId, permit);
     }
 
@@ -144,6 +159,15 @@ export class EmailProcessor {
       },
       'Send permit reserved',
     );
+
+    await this.#notifyRateLimitSafely({
+      userId: email.userId,
+      senderId: email.senderId,
+      senderEmail: email.sender.fromEmail,
+      hourWindow: permit.hourWindow,
+      hourlyLimit: effectiveLimits.hourlyLimit,
+      limitReachedThisReservation: permit.limitReachedThisReservation,
+    });
 
     const claimed = await claimScheduledEmail(this.#prisma, emailId);
     if (!claimed) {
@@ -279,6 +303,22 @@ export class EmailProcessor {
       this.#logger.error(
         { error, emailId, operation: 'project-email' },
         'Elasticsearch projection failed after durable Email state change',
+      );
+    }
+  }
+
+  async #notifyRateLimitSafely(input: Parameters<RateLimitNotifier['notify']>[0]): Promise<void> {
+    try {
+      await this.#rateLimitNotifier.notify(input);
+    } catch (error) {
+      this.#logger.error(
+        {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+          senderId: input.senderId,
+          hourWindow: input.hourWindow,
+          operation: 'slack-rate-limit-alert',
+        },
+        'Slack rate-limit notification failed; email delivery continues',
       );
     }
   }

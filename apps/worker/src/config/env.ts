@@ -14,6 +14,7 @@ const infrastructureFieldsSchema = z.object({
     (value) => (value === '' ? undefined : value),
     z.string().min(1).optional(),
   ),
+  APP_ENCRYPTION_KEY: z.string().min(32),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
 });
 

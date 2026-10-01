@@ -3,6 +3,7 @@ import express, { type Express, type RequestHandler } from 'express';
 
 import type { CampaignScheduler } from './modules/campaigns/campaign-scheduler.js';
 import type { EmailSearchService } from '@reachinbox/search';
+import type { Router } from 'express';
 import {
   createSchedulingRouter,
   schedulingUploadErrorHandler,
@@ -17,6 +18,7 @@ export interface AppDependencies {
   emailSearch?: Pick<EmailSearchService, 'search'>;
   authenticationMiddleware?: RequestHandler | undefined;
   logger?: { error(bindings: Record<string, unknown>, message: string): void };
+  slackRouter?: Router;
 }
 
 export function createApp({
@@ -25,6 +27,7 @@ export function createApp({
   emailSearch,
   authenticationMiddleware,
   logger = { error: () => undefined },
+  slackRouter,
 }: AppDependencies = {}): Express {
   const app = express();
 
@@ -61,6 +64,8 @@ export function createApp({
   if (emailQueue) {
     app.use(BULL_BOARD_PATH, createBullBoardRouter(emailQueue));
   }
+
+  if (slackRouter) app.use('/api/v1/integrations/slack', slackRouter);
 
   return app;
 }

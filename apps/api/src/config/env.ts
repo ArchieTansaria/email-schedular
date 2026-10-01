@@ -6,6 +6,21 @@ const optionalUuid = z.preprocess(
   z.uuid().optional(),
 );
 
+const slackConfigurationSchema = z
+  .object({
+    SLACK_CLIENT_ID: z.string().min(1).optional(),
+    SLACK_CLIENT_SECRET: z.string().min(1).optional(),
+    SLACK_CALLBACK_URL: z.url().optional(),
+  })
+  .refine(
+    (value) =>
+      [value.SLACK_CLIENT_ID, value.SLACK_CLIENT_SECRET, value.SLACK_CALLBACK_URL].every(Boolean) ||
+      [value.SLACK_CLIENT_ID, value.SLACK_CLIENT_SECRET, value.SLACK_CALLBACK_URL].every(
+        (entry) => !entry,
+      ),
+    { message: 'Slack OAuth configuration must be either complete or entirely omitted' },
+  );
+
 const apiFieldsSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
@@ -16,8 +31,10 @@ const apiFieldsSchema = z.object({
 export type ApiConfig = RuntimeEnv & z.infer<typeof apiFieldsSchema>;
 
 export function parseApiConfig(input: Record<string, unknown>): ApiConfig {
-  return {
+  const config = {
     ...parseRuntimeEnv(input),
     ...apiFieldsSchema.parse(input),
   };
+  slackConfigurationSchema.parse(config);
+  return config;
 }

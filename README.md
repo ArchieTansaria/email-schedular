@@ -11,6 +11,7 @@ The scheduling API feeds a separate BullMQ Worker that uses a distributed Redis 
 - `apps/web`: React, Vite, and Tailwind browser application.
 - `packages/shared`: portable contracts, schemas, constants, and utilities shared by all runtimes.
 - `packages/search`: backend-only Elasticsearch mapping, projection, search, and reindex behavior shared by API and Worker.
+- `packages/slack`: backend-only Slack OAuth, encryption, integration storage, webhook, and distributed alert behavior.
 - `prisma`: PostgreSQL/Prisma relational domain schema, migration history, and database integration tests.
 - `elastic`: local Elasticsearch operational notes.
 - `scripts`: operational scripts added as later phases require them.
@@ -279,10 +280,48 @@ pnpm infra:up
 pnpm test:search
 ```
 
+## Slack OAuth and rate-limit alerts
+
+Slack is an optional per-user integration, separate from application authentication. It uses Slack OAuth V2 with only the `incoming-webhook` scope. OAuth state is random, stored in Redis for ten minutes, and consumed once. Slack access tokens and incoming webhook URLs are encrypted with AES-256-GCM using `APP_ENCRYPTION_KEY` before PostgreSQL persistence.
+
+Create a modern Slack app at the Slack API dashboard, enable **Incoming Webhooks**, and add this OAuth redirect URL exactly:
+
+```text
+http://localhost:4000/api/v1/integrations/slack/callback
+```
+
+Configure:
+
+```env
+SLACK_CLIENT_ID=<Basic Information client ID>
+SLACK_CLIENT_SECRET=<Basic Information client secret>
+SLACK_CALLBACK_URL=http://localhost:4000/api/v1/integrations/slack/callback
+APP_ENCRYPTION_KEY=<stable random secret of at least 32 characters>
+```
+
+Do not use Slack's legacy custom Incoming WebHook integration. With a non-production `DEV_AUTH_USER_ID`, open `http://localhost:4000/api/v1/integrations/slack/connect`, authorize the workspace, and choose the destination channel. Safe API operations are:
+
+```bash
+curl http://localhost:4000/api/v1/integrations/slack/status
+curl -X POST http://localhost:4000/api/v1/integrations/slack/test
+curl -X DELETE http://localhost:4000/api/v1/integrations/slack
+```
+
+Disconnect revokes the stored Slack token before deleting the local row. A provider outage retains the local integration and returns a retryable failure instead of creating ambiguous half-state. Reconnecting repeats OAuth and upserts the user's single integration without redeployment.
+
+The final allowed Redis reservation—when the count first equals the effective hourly limit—triggers the alert. A Redis `SET NX PX` marker deduplicates alerts by sender and UTC window across Workers. Successful markers survive beyond the window. Failed webhook delivery conditionally releases the marker so a later overflow observation can retry without duplicating a successful alert. Slack absence or failure is logged but never changes Email state or SMTP behavior.
+
+Focused deterministic tests use fake Slack HTTP with real PostgreSQL and Redis:
+
+```bash
+pnpm infra:up
+pnpm test:slack
+```
+
 ## Environment model
 
 Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. SMTP values remain optional for unrelated processes but are required by worker-specific parsing. `ELASTICSEARCH_API_KEY` remains optional for local development and supports managed Elasticsearch. OAuth credentials remain optional until their phases.
 
 ## Phase status
 
-Phases 0–6A are complete through distributed throttling, queue recovery, and Elasticsearch email search. Google OAuth, Slack OAuth/live alerts, non-search read APIs, and the assignment dashboard remain pending. The limiter already exposes the final-cap reservation metadata required by the later Slack phase.
+Phases 0–6B are complete through distributed throttling, queue recovery, Elasticsearch email search, real Slack OAuth, and live rate-limit webhook delivery. Google OAuth, non-search read APIs, and the assignment dashboard remain pending.

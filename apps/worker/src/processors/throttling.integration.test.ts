@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { EmailStatus, PrismaClient } from '@prisma/client';
+import { SecretCipher, SlackRateLimitNotifier, type RateLimitNotifier } from '@reachinbox/slack';
 import {
   EMAIL_QUEUE_NAME,
   SEND_EMAIL_JOB_NAME,
@@ -38,6 +39,7 @@ let limiterClients: ReturnType<typeof createLimiterRedisClient>[];
 
 async function clearDatabase(): Promise<void> {
   await prisma.email.deleteMany();
+  await prisma.slackIntegration.deleteMany();
   await prisma.campaign.deleteMany();
   await prisma.sender.deleteMany();
   await prisma.user.deleteMany();
@@ -119,6 +121,7 @@ function startWorker(options: {
   name: string;
   minDelayMs?: number;
   hourlyLimit?: number;
+  rateLimitNotifier?: RateLimitNotifier;
 }): Worker<SendEmailJobData> {
   const processor = new EmailProcessor({
     prisma,
@@ -130,6 +133,7 @@ function startWorker(options: {
     },
     logger,
     now: options.now,
+    ...(options.rateLimitNotifier ? { rateLimitNotifier: options.rateLimitNotifier } : {}),
   });
   const worker = createEmailWorker({
     redisUrl,
@@ -215,6 +219,28 @@ describe('Worker distributed throttling', () => {
     const records = await createEmails(20, { delayMs: 0, hourlyLimit: 5 });
     const sender = fakeSender();
     const now = new Date('2030-01-01T14:10:00.000Z');
+    const cipher = new SecretCipher('test-encryption-key-that-is-at-least-32-characters');
+    await prisma.slackIntegration.create({
+      data: {
+        userId: records.user.id,
+        teamId: 'T1',
+        teamName: 'Workspace',
+        channelId: 'C1',
+        channelName: '#alerts',
+        accessTokenEncrypted: cipher.encrypt('token'),
+        webhookUrlEncrypted: cipher.encrypt('https://hooks.slack.com/services/T/B/secret'),
+      },
+    });
+    const alertRedis = createLimiterRedisClient(redisUrl);
+    limiterClients.push(alertRedis);
+    const slackClient = { postWebhook: vi.fn(async () => undefined) };
+    const rateLimitNotifier = new SlackRateLimitNotifier({
+      prisma,
+      redis: alertRedis,
+      cipher,
+      client: slackClient,
+      prefix: `cap-alert-${randomUUID()}`,
+    });
     const first = startWorker({
       sender,
       permitGate: realPermitGate(),
@@ -222,6 +248,7 @@ describe('Worker distributed throttling', () => {
       concurrency: 10,
       name: 'cap-worker-a',
       hourlyLimit: 5,
+      rateLimitNotifier,
     });
     const second = startWorker({
       sender,
@@ -230,6 +257,7 @@ describe('Worker distributed throttling', () => {
       concurrency: 10,
       name: 'cap-worker-b',
       hourlyLimit: 5,
+      rateLimitNotifier,
     });
     await Promise.all([first.waitUntilReady(), second.waitUntilReady()]);
 
@@ -241,6 +269,7 @@ describe('Worker distributed throttling', () => {
     });
 
     expect(sender.send).toHaveBeenCalledTimes(5);
+    expect(slackClient.postWebhook).toHaveBeenCalledOnce();
     expect(await prisma.email.count({ where: { status: EmailStatus.FAILED } })).toBe(0);
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -250,6 +279,46 @@ describe('Worker distributed throttling', () => {
         limitReachedThisReservation: true,
       }),
       'Send permit reserved',
+    );
+  });
+
+  it('continues SMTP and reaches SENT when a limit alert provider call fails', async () => {
+    const records = await createEmails(1, { delayMs: 0, hourlyLimit: 1 });
+    const sender = fakeSender();
+    const processor = new EmailProcessor({
+      prisma,
+      emailSender: sender,
+      sendPermitGate: {
+        acquire: async () => ({
+          allowed: true,
+          count: 1,
+          limitReachedThisReservation: true,
+          hourWindow: '2030-01-01T14',
+          nextAllowedAt: new Date('2030-01-01T14:00:01.000Z'),
+        }),
+      },
+      rateLimitNotifier: { notify: vi.fn().mockRejectedValue(new Error('Slack timeout')) },
+      platformLimits: { minSendDelayMs: 0, maxEmailsPerHourPerSender: 1 },
+      logger,
+      now: () => new Date('2030-01-01T14:00:00.000Z'),
+    });
+
+    await expect(
+      processor.process({
+        id: makeEmailJobId(records.emails[0]!.id),
+        name: SEND_EMAIL_JOB_NAME,
+        data: { emailId: records.emails[0]!.id },
+        token: 'token',
+        moveToDelayed: vi.fn(),
+      }),
+    ).resolves.toEqual({ outcome: 'sent' });
+    expect(sender.send).toHaveBeenCalledOnce();
+    expect(
+      await prisma.email.findUniqueOrThrow({ where: { id: records.emails[0]!.id } }),
+    ).toMatchObject({ status: EmailStatus.SENT });
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: 'slack-rate-limit-alert' }),
+      expect.stringContaining('continues'),
     );
   });
 

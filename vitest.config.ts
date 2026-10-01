@@ -5,6 +5,7 @@ export default defineConfig({
     projects: [
       'packages/shared',
       'packages/search',
+      'packages/slack',
       'apps/api',
       'apps/worker',
       'apps/web',
