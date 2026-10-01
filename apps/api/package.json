@@ -10,15 +10,20 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:queue": "vitest run src/queue src/bull-board.integration.test.ts",
     "pretest": "pnpm --filter @reachinbox/shared build",
     "pretest:run": "pnpm --filter @reachinbox/shared build"
   },
   "dependencies": {
+    "@bull-board/api": "9.10.2",
+    "@bull-board/express": "9.10.2",
     "@elastic/elasticsearch": "8.19.0",
     "@prisma/client": "6.15.0",
     "@reachinbox/shared": "workspace:*",
+    "bullmq": "6.3.11",
     "dotenv": "17.2.1",
     "express": "5.1.0",
+    "ioredis": "6.0.0",
     "pino": "9.9.0",
     "zod": "4.1.5"
   },

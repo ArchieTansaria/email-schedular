@@ -17,6 +17,10 @@
     "./env": {
       "types": "./src/env.ts",
       "import": "./dist/env.js"
+    },
+    "./queue": {
+      "types": "./src/queue.ts",
+      "import": "./dist/queue.js"
     }
   },
   "scripts": {

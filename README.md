@@ -2,11 +2,11 @@
 
 Production-oriented email scheduling assignment with its Phase 0 foundation and Phase 1 relational domain model complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
 
-Queue and scheduler functionality is not implemented yet. Campaign scheduling, BullMQ processing, SMTP delivery, rate limiting, OAuth, Elasticsearch indexing, and email APIs begin in later phases.
+Campaign scheduling and queue consumption are not implemented yet. SMTP delivery, rate limiting, OAuth, Elasticsearch indexing, and email business APIs begin in later phases.
 
 ## Architecture
 
-- `apps/api`: Express HTTP process. Phase 0 exposes `GET /api/health`.
+- `apps/api`: Express HTTP process with `GET /api/health`, the BullMQ producer, and Bull Board.
 - `apps/worker`: independent background process with validated configuration and graceful shutdown hooks.
 - `apps/web`: React, Vite, and Tailwind browser application.
 - `packages/shared`: portable contracts, schemas, constants, and utilities shared by all runtimes.
@@ -16,6 +16,8 @@ Queue and scheduler functionality is not implemented yet. Campaign scheduling, B
 - `context`: read-only product and architecture guidance.
 
 PostgreSQL will be the source of truth, Redis/BullMQ the durable execution layer, and Elasticsearch a searchable projection. The API and worker remain separate processes so they can later be deployed as a Render web service and Render background worker. Production Redis is expected to use an Upstash Redis TCP URL; Elasticsearch is expected to use Elastic Cloud.
+
+Phase 2 provides queue infrastructure only: it does not yet schedule campaigns or consume jobs.
 
 ## Prerequisites
 
@@ -109,10 +111,25 @@ Database integration tests never use `DATABASE_URL`. They use `TEST_DATABASE_URL
 pnpm test:db
 ```
 
+## Queue foundation
+
+The API owns one BullMQ producer for the `email-send` queue. Jobs are named `send-email`, contain only `{ emailId }`, and use `email-<uuid>` IDs. Future schedules use BullMQ delays; timestamps at or before enqueue time use zero delay. Assignment-scale bulk insertion uses one `addBulk()` operation rather than sequential Redis calls.
+
+Run the real-Redis queue tests with infrastructure running:
+
+```bash
+pnpm infra:up
+pnpm test:queue
+```
+
+Start the API and open Bull Board at `http://localhost:4000/admin/queues`. The board is intentionally unauthenticated for local development; production protection is deferred to the authentication phase. No BullMQ Worker is started in Phase 2, so queued jobs remain waiting or delayed.
+
+BullMQ custom IDs prevent duplicate insertion only while the prior queue job exists. PostgreSQL status remains the future business idempotency boundary. The DB-to-Redis failure window is intentionally deferred to startup reconciliation.
+
 ## Environment model
 
 Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. Infrastructure URLs and local safety settings are required. Credentials for future OAuth, SMTP, and managed Elasticsearch features are represented but optional until those features are implemented; production-specific validation will be tightened alongside each feature.
 
 ## Phase status
 
-Phase 0 repository and runtime foundations are complete. Phase 1 relational domain schema, migration history, and PostgreSQL invariant tests are complete. Scheduling, persistence reconciliation, search, OAuth, queue processing/dashboard, SMTP delivery, and the assignment dashboard remain pending.
+Phase 0 repository and runtime foundations are complete. Phase 1 relational domain schema, migration history, and PostgreSQL invariant tests are complete. Phase 2 BullMQ producer infrastructure and Bull Board are complete. Campaign scheduling, queue consumption, persistence reconciliation, search, OAuth, SMTP delivery, and the assignment dashboard remain pending.

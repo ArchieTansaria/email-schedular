@@ -1,7 +1,14 @@
 import { createHealthResponse } from '@reachinbox/shared/contracts';
 import express, { type Express } from 'express';
 
-export function createApp(): Express {
+import { BULL_BOARD_PATH, createBullBoardRouter } from './queue/bull-board.js';
+import type { EmailQueue } from './queue/email-queue.js';
+
+export interface AppDependencies {
+  emailQueue?: EmailQueue;
+}
+
+export function createApp({ emailQueue }: AppDependencies = {}): Express {
   const app = express();
 
   app.disable('x-powered-by');
@@ -10,6 +17,10 @@ export function createApp(): Express {
   app.get('/api/health', (_request, response) => {
     response.status(200).json(createHealthResponse());
   });
+
+  if (emailQueue) {
+    app.use(BULL_BOARD_PATH, createBullBoardRouter(emailQueue));
+  }
 
   return app;
 }

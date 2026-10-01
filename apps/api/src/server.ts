@@ -5,14 +5,17 @@ import { parseApiConfig } from './config/env.js';
 import { loadRootEnvironment } from './config/load-env.js';
 import { createLogger } from './config/logger.js';
 import { ShutdownManager } from './lifecycle.js';
+import { EmailQueueProducer } from './queue/email-queue.js';
 
 loadRootEnvironment();
 
 const config = parseApiConfig(process.env);
 const logger = createLogger(config);
-const server = createServer(createApp());
+const emailQueueProducer = new EmailQueueProducer({ redisUrl: config.REDIS_URL, logger });
+const server = createServer(createApp({ emailQueue: emailQueueProducer.queue }));
 const shutdownManager = new ShutdownManager();
 
+shutdownManager.register(() => emailQueueProducer.close());
 shutdownManager.register(
   () =>
     new Promise<void>((resolve, reject) => {

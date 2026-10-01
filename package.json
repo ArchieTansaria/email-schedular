@@ -35,6 +35,7 @@
     "pretest:run": "pnpm db:test:migrate",
     "pretest:coverage": "pnpm db:test:migrate",
     "test:db": "vitest run --config prisma/vitest.config.ts",
+    "test:queue": "pnpm build:shared && pnpm --filter @reachinbox/api test:queue",
     "pretest:db": "pnpm db:test:migrate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
