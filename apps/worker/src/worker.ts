@@ -1,17 +1,31 @@
 import { parseWorkerConfig } from './config/env.js';
 import { loadRootEnvironment } from './config/load-env.js';
 import { createLogger } from './config/logger.js';
+import { createPrismaClient } from './config/prisma.js';
+import { createEmailWorker } from './email-worker.js';
 import { ShutdownManager } from './lifecycle.js';
+import { EmailProcessor } from './processors/email-processor.js';
+import { EtherealEmailSender, getEtherealAccounts } from './smtp/ethereal-email-sender.js';
 
 loadRootEnvironment();
 
 const config = parseWorkerConfig(process.env);
 const logger = createLogger(config);
+const prisma = createPrismaClient(config.DATABASE_URL);
+const emailSender = new EtherealEmailSender(getEtherealAccounts(config));
+const processor = new EmailProcessor({ prisma, emailSender, logger });
+const worker = createEmailWorker({
+  redisUrl: config.REDIS_URL,
+  concurrency: config.WORKER_CONCURRENCY,
+  processor,
+  logger,
+});
 const shutdownManager = new ShutdownManager();
 
-// A referenced timer keeps the foundation process alive until BullMQ owns the event loop later.
-const keepAliveTimer = setInterval(() => undefined, 60_000);
-shutdownManager.register(() => clearInterval(keepAliveTimer));
+// Reverse cleanup order is Worker (waits for active jobs), Prisma, then SMTP transports.
+shutdownManager.register(() => emailSender.close());
+shutdownManager.register(() => prisma.$disconnect());
+shutdownManager.register(() => worker.close());
 
 let shuttingDown = false;
 
@@ -35,7 +49,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
-logger.info(
-  { concurrency: config.WORKER_CONCURRENCY },
-  'Worker runtime ready; queue processing not configured yet',
-);
+try {
+  await worker.waitUntilReady();
+  logger.info({ concurrency: config.WORKER_CONCURRENCY }, 'Email Worker ready and consuming jobs');
+} catch (error) {
+  logger.error({ error }, 'Email Worker failed to start');
+  await shutdownManager.shutdown();
+  throw error;
+}

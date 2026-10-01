@@ -2,12 +2,12 @@
 
 Production-oriented email scheduling assignment with its Phase 0 foundation and Phase 1 relational domain model complete. The repository is a strict TypeScript pnpm monorepo with separate API, worker, and browser runtimes.
 
-The scheduling application service is exposed through an authenticated-principal HTTP boundary. Real Google authentication, queue consumption, SMTP delivery, rate limiting, Elasticsearch indexing, and read APIs begin in later phases.
+The scheduling API feeds a separate BullMQ Worker that uses atomic PostgreSQL claims and configured Ethereal SMTP accounts. Real Google authentication, runtime rate limiting, reconciliation, Elasticsearch indexing, and read APIs begin in later phases.
 
 ## Architecture
 
 - `apps/api`: Express HTTP process with health and campaign scheduling routes, the BullMQ producer, and Bull Board.
-- `apps/worker`: independent background process with validated configuration and graceful shutdown hooks.
+- `apps/worker`: independent BullMQ consumer with atomic Email claims, reusable Ethereal transports, and graceful shutdown.
 - `apps/web`: React, Vite, and Tailwind browser application.
 - `packages/shared`: portable contracts, schemas, constants, and utilities shared by all runtimes.
 - `prisma`: PostgreSQL/Prisma relational domain schema, migration history, and database integration tests.
@@ -17,7 +17,7 @@ The scheduling application service is exposed through an authenticated-principal
 
 PostgreSQL will be the source of truth, Redis/BullMQ the durable execution layer, and Elasticsearch a searchable projection. The API and worker remain separate processes so they can later be deployed as a Render web service and Render background worker. Production Redis is expected to use an Upstash Redis TCP URL; Elasticsearch is expected to use Elastic Cloud.
 
-Phase 2 provides queue infrastructure; Phase 3 provides the scheduling service and HTTP boundary. Jobs are not consumed yet.
+Phase 2 provides queue infrastructure, Phase 3 provides scheduling, and Phase 4 consumes jobs and delivers through Ethereal. Phase 5 must still add the distributed runtime permit before each claim.
 
 ## Prerequisites
 
@@ -35,7 +35,7 @@ pnpm prisma:generate
 pnpm infra:up
 ```
 
-The checked-in example contains safe local infrastructure URLs and development-only secret placeholders. OAuth and Ethereal values remain empty because those features are not implemented yet. Never commit `.env` or real credentials.
+The checked-in example contains safe local infrastructure URLs and development-only placeholders. Add two stable Ethereal accounts before starting the Worker; OAuth values remain empty until those features are implemented. Never commit `.env` or real credentials.
 
 ## Development commands
 
@@ -61,7 +61,7 @@ Default local URLs:
 - Redis: `localhost:6379`
 - Elasticsearch: `http://localhost:9200`
 
-The API and worker load `.env` from the repository root. Stop either process with `Ctrl+C`; both runtime entrypoints handle `SIGINT` and `SIGTERM` and have a central place to register future resource cleanup.
+The API and worker load `.env` from the repository root. Stop either process with `Ctrl+C`. Worker shutdown closes BullMQ first, allowing active jobs to finish, then disconnects Prisma and closes SMTP transports.
 
 ## Local infrastructure
 
@@ -122,9 +122,54 @@ pnpm infra:up
 pnpm test:queue
 ```
 
-Start the API and open Bull Board at `http://localhost:4000/admin/queues`. The board is intentionally unauthenticated for local development; production protection is deferred to the authentication phase. No BullMQ Worker is started in Phase 2, so queued jobs remain waiting or delayed.
+Start the API and open Bull Board at `http://localhost:4000/admin/queues`. The board is intentionally unauthenticated for local development; production protection is deferred to the authentication phase. Start `pnpm dev:worker` separately to consume eligible jobs.
 
-BullMQ custom IDs prevent duplicate insertion only while the prior queue job exists. PostgreSQL status remains the future business idempotency boundary. The DB-to-Redis failure window is intentionally deferred to startup reconciliation.
+BullMQ custom IDs prevent duplicate insertion only while the prior queue job exists. PostgreSQL status is the Worker business-idempotency boundary. The DB-to-Redis failure window remains deferred to startup reconciliation.
+
+## Worker and Ethereal delivery
+
+Create two stable accounts at [Ethereal Email](https://ethereal.email/) and configure:
+
+```env
+ETHEREAL_SENDER_1_USER=sender-a@ethereal.email
+ETHEREAL_SENDER_1_PASS=...
+ETHEREAL_SENDER_2_USER=sender-b@ethereal.email
+ETHEREAL_SENDER_2_PASS=...
+WORKER_CONCURRENCY=10
+```
+
+Each active `Sender.fromEmail` must exactly match one configured Ethereal username, ignoring casing. Credentials remain outside PostgreSQL. The API can start without them; the Worker deliberately fails configuration validation unless both accounts are present.
+
+The Worker validates `{ emailId }`, loads Email, Campaign, and Sender from PostgreSQL, and conditionally updates only `SCHEDULED` rows to `PROCESSING`. Exactly one concurrent Worker can win that claim. `SENT`, `FAILED`, and previously `PROCESSING` rows are safe no-ops. SMTP uses a stable `<email-<uuid>@reachinbox.local>` Message-ID. Successful delivery stores `SENT`, `sentAt`, Nodemailer's returned message ID, and the Ethereal preview URL.
+
+Clearly permanent pre-acceptance failures become `FAILED`. Network/acknowledgement uncertainty remains `PROCESSING` with a diagnostic and the BullMQ job fails; a later execution sees `PROCESSING` and does not send again. This favors avoiding duplicate mail but is not a mathematical exactly-once SMTP guarantee.
+
+Run deterministic Worker coverage with local PostgreSQL and Redis:
+
+```bash
+pnpm infra:up
+pnpm test:worker
+```
+
+The normal suite injects fake SMTP and never requires Internet access. To send one verification message through each real configured account:
+
+```bash
+pnpm verify:ethereal
+```
+
+The command prints each returned Message-ID and Nodemailer-generated preview URL. It fails clearly if either account is missing.
+
+### Manual Phase 4 verification
+
+1. Put two Ethereal username/password pairs in `.env`.
+2. Run `pnpm exec prisma studio`; create or update two active Sender rows so each `fromEmail` matches one configured Ethereal username. Ensure both belong to the development User selected by `DEV_AUTH_USER_ID`.
+3. Start `pnpm infra:up`, then run `pnpm dev:api` and `pnpm dev:worker` in separate terminals.
+4. Submit a small campaign through `POST /api/v1/campaigns` using the curl example below, selecting either Sender and a start time a minute or two ahead.
+5. Watch the job move through Bull Board at `http://localhost:4000/admin/queues`.
+6. Inspect the Email in Prisma Studio: it should move through `PROCESSING` to `SENT` and contain `sentAt`, `smtpMessageId`, and `previewUrl`.
+7. Open `previewUrl` to inspect the captured Ethereal message. Repeat with the other Sender to demonstrate account selection.
+
+Use `pnpm test:worker` to verify duplicate/requeue safety without risking extra live SMTP calls. Its completed-job-removal and two-Worker tests recreate duplicate execution opportunities and assert that fake SMTP is invoked exactly once.
 
 ## Scheduling application service
 
@@ -159,8 +204,8 @@ PostgreSQL commits before Redis enqueue. An idempotent client retry can restore 
 
 ## Environment model
 
-Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. Infrastructure URLs and local safety settings are required. Credentials for future OAuth, SMTP, and managed Elasticsearch features are represented but optional until those features are implemented; production-specific validation will be tightened alongside each feature.
+Runtime configuration is parsed with Zod from an explicit input object. Application code consumes validated configuration rather than reading scattered `process.env` values. SMTP values remain optional for unrelated processes but are required by worker-specific parsing. OAuth and managed Elasticsearch credentials remain optional until their phases.
 
 ## Phase status
 
-Phase 0 repository and runtime foundations, Phase 1 relational model, Phase 2 BullMQ producer/Bull Board, and the Phase 3 scheduling service plus HTTP API are complete. Queue consumption, persistence reconciliation, search, OAuth, SMTP delivery, and the assignment dashboard remain pending.
+Phases 0–3 and Phase 4 Worker/Ethereal delivery are complete. Distributed runtime spacing/hourly limits, startup reconciliation, search, OAuth, Slack, and the assignment dashboard remain pending. Until Phase 5 adds the Redis permit before the database claim, the Worker is not the final production-safe throttled sending path.
