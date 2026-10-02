@@ -9,3 +9,7 @@ coverage/
 apps/web/.vite/
 prisma/generated/
 context/
+
+# Local lead files used for manual campaign testing
+/leads.csv
+/leads-b.csv
