@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>ReachInbox Email Scheduler</h1>
+  <h1>Persistent Email Scheduler</h1>
   <p>
     <strong>A full-stack, persistent email scheduling system built for reliable delivery at scale.</strong>
   </p>
