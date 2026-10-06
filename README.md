@@ -14,7 +14,7 @@
   </p>
 </div>
 
-ReachInbox Email Scheduler is a production-oriented implementation of a distributed email scheduler. An authenticated user can upload a CSV/TXT lead list, choose one of multiple senders, configure a start time, inter-email delay, and hourly limit, then follow each recipient from `SCHEDULED` through delivery.
+This is a production-oriented implementation of a distributed email scheduler. An authenticated user can upload a CSV/TXT lead list, choose one of multiple senders, configure a start time, inter-email delay, and hourly limit, then follow each recipient from `SCHEDULED` through delivery.
 
 The project is intentionally more than a CRUD dashboard. It demonstrates durable delayed work, cross-worker coordination, tenant isolation, failure recovery, idempotent request handling, searchable projections, and isolated third-party side effects.
 
