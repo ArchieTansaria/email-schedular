@@ -1,7 +1,12 @@
 import { EMAIL_QUEUE_NAME, type SendEmailJobData } from '@reachinbox/shared/queue';
-import { Worker, type ConnectionOptions } from 'bullmq';
+import { UnrecoverableError, Worker, type ConnectionOptions } from 'bullmq';
 
 import type { EmailJobResult, EmailProcessor } from './processors/email-processor.js';
+import {
+  AmbiguousDeliveryError,
+  DefinitiveDeliveryError,
+  SenderConfigurationError,
+} from './smtp/types.js';
 
 interface WorkerLogger {
   info(bindings: Record<string, unknown>, message: string): void;
@@ -37,7 +42,22 @@ export function createEmailWorker({
 }: CreateEmailWorkerOptions): Worker<SendEmailJobData, EmailJobResult> {
   const worker = new Worker<SendEmailJobData, EmailJobResult>(
     EMAIL_QUEUE_NAME,
-    (job) => processor.process(job),
+    async (job) => {
+      try {
+        return await processor.process(job);
+      } catch (error) {
+        if (
+          error instanceof AmbiguousDeliveryError ||
+          error instanceof DefinitiveDeliveryError ||
+          error instanceof SenderConfigurationError
+        ) {
+          const terminal = new UnrecoverableError(error.message);
+          terminal.cause = error;
+          throw terminal;
+        }
+        throw error;
+      }
+    },
     {
       connection: createWorkerConnectionOptions(redisUrl),
       concurrency,

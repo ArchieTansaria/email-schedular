@@ -52,7 +52,7 @@ The project is intentionally more than a CRUD dashboard. It demonstrates durable
 | Search           | Elasticsearch-backed, tenant-scoped subject/body/recipient/sender search with status filters                                     |
 | Queue visibility | Authenticated Bull Board at `/admin/queues`                                                                                      |
 | Slack            | Real OAuth V2 using the minimal `incoming-webhook` scope, connection controls, test notification, and rate-limit alerts          |
-| Recovery         | Startup/manual PostgreSQL-to-BullMQ reconciliation and graceful API/Worker shutdown                                              |
+| Recovery         | Automatic job retries, startup/background/manual PostgreSQL-to-BullMQ reconciliation, and graceful shutdown                      |
 
 ### Reliability and security
 
@@ -181,15 +181,21 @@ The effective limits are the stricter combination of campaign input and platform
 
 Permits represent send attempts and are not refunded after SMTP or claim failure. This is conservative: capacity can be underused, but the configured cap is not exceeded.
 
-### Restart recovery
+### Retries and recovery
+
+Transient failures before the SMTP claim use BullMQ exponential backoff. `EMAIL_JOB_ATTEMPTS=5` means five total executions (the first attempt plus four retries); `EMAIL_JOB_BACKOFF_MS=2000` gives retry delays of approximately 2, 4, 8, and 16 seconds. Set the same policy on API and Worker services. New jobs, including missing jobs restored from PostgreSQL, receive this shared policy. Existing retained jobs keep their stored policy.
+
+Definitive SMTP failures and ambiguous delivery outcomes stop automatic job retries. `PROCESSING` records are never reset or automatically resent. If a database operation fails after a claim, any subsequent execution also observes the claim and skips SMTP. Elasticsearch and Slack errors remain isolated from email retries.
 
 - BullMQ delayed jobs survive API and Worker process restarts because they live in Redis.
 - Local Redis uses AOF (`appendfsync everysec`) and `noeviction`.
-- On Worker startup, reconciliation scans `SCHEDULED` rows in bounded batches and restores missing or terminal queue jobs using canonical IDs.
-- Overdue work is restored with zero delay; future work retains its current `scheduledAt` delay.
+- On Worker startup and in background recovery passes, reconciliation scans `SCHEDULED` rows in bounded batches and restores missing or terminal queue jobs using canonical IDs.
+- `QUEUE_RECOVERY_INTERVAL_MS=60000` runs the next background pass 60 seconds after the previous pass completes. Passes do not overlap within a Worker; failures are logged and the next pass still runs. Shutdown cancels the timer and waits for an active pass before closing stores.
+- Missing overdue work is restored with zero delay; missing future work retains its current `scheduledAt` delay. Terminal jobs are atomically retried with a fresh attempt budget, preserving their stored options and avoiding deletion races between Workers.
+- Every execution checks PostgreSQL's current `scheduledAt` before acquiring a permit. An early retry is moved back to delayed without consuming a failure attempt or reserving quota.
 - Reconciliation never queues `PROCESSING`, `SENT`, or `FAILED` rows.
 
-This is startup/manual reconciliation, not cron-based scheduling.
+This recovers exhausted retries and DB-to-queue gaps without restarting the Worker. Persistent pre-claim failures remain `SCHEDULED` and receive later recovery opportunities; recovery is not a finite lifetime retry cap. Background polling repairs execution state; email scheduling still uses BullMQ delayed jobs with no cron. `pnpm reconcile:queue` remains available for manual recovery.
 
 ### Search and notification isolation
 
@@ -480,6 +486,7 @@ Meaningful scenarios include:
 - duplicate/recreated jobs and two competing Workers;
 - cap-five/twenty-job throttling with delayed overflow;
 - restart-style queue reconciliation;
+- transient failure retries, exhausted-budget background recovery, concurrent reconcilers, and preservation of throttled due times after queue-transition failure;
 - definitive versus ambiguous SMTP failures;
 - Elasticsearch and Slack failure isolation;
 - tenant-scoped reads/search, OAuth state, session persistence, and secret encryption;
@@ -552,7 +559,7 @@ https://<web-domain>/api/v1/auth/google/callback
 https://<web-domain>/api/v1/integrations/slack/callback
 ```
 
-Set `FRONTEND_URL=https://<web-domain>`, `HOST=0.0.0.0`, and `NODE_ENV=production`. Web and Worker must share `DATABASE_URL`, `REDIS_URL`, Elasticsearch configuration, `APP_ENCRYPTION_KEY`, sender usernames, and platform limits. Only the Worker needs Ethereal passwords; only the Web service needs session and OAuth client secrets.
+Set `FRONTEND_URL=https://<web-domain>`, `HOST=0.0.0.0`, and `NODE_ENV=production`. Web and Worker must share `DATABASE_URL`, `REDIS_URL`, Elasticsearch configuration, `APP_ENCRYPTION_KEY`, sender usernames, platform limits, `EMAIL_JOB_ATTEMPTS`, and `EMAIL_JOB_BACKOFF_MS`. Only the Worker needs Ethereal passwords and `QUEUE_RECOVERY_INTERVAL_MS`; only the Web service needs session and OAuth client secrets.
 
 The Redis service must provide durable Redis-protocol storage, TLS (`rediss://` when hosted), Lua `EVAL`, and a no-eviction policy suitable for BullMQ. Elasticsearch may use URL plus API-key authentication.
 

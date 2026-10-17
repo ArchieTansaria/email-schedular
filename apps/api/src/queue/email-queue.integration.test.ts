@@ -33,6 +33,23 @@ afterEach(async () => {
 });
 
 describe('email queue with real Redis', () => {
+  it('persists the configured retry policy for both single and bulk additions', async () => {
+    await producer.close();
+    producer = new EmailQueueProducer({
+      redisUrl,
+      logger,
+      prefix,
+      retryConfig: { EMAIL_JOB_ATTEMPTS: 3, EMAIL_JOB_BACKOFF_MS: 100 },
+    });
+    const single = await producer.enqueueEmailJob(queueInput(randomUUID()), fixedNow);
+    const [bulk] = await producer.enqueueEmailJobsBulk([queueInput(randomUUID())], fixedNow);
+    for (const job of [single, bulk!]) {
+      expect((await producer.queue.getJob(job.id!))?.opts).toMatchObject({
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 100 },
+      });
+    }
+  });
   it('connects and reports the Redis-backed BullMQ version', async () => {
     await expect(producer.queue.getVersion()).resolves.toMatch(/^bullmq:/);
   });

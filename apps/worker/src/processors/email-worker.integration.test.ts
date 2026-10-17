@@ -80,7 +80,7 @@ async function createTestEmail(options: TestEmailOptions = {}) {
       senderId: sender.id,
       subject: 'Worker campaign subject',
       body: 'Worker campaign body',
-      startAt: new Date('2030-01-01T10:00:00.000Z'),
+      startAt: new Date('2020-01-01T10:00:00.000Z'),
       delayMs: 2_000,
       hourlyLimit: 200,
       totalRecipients: 1,
@@ -93,8 +93,8 @@ async function createTestEmail(options: TestEmailOptions = {}) {
       senderId: sender.id,
       campaignId: campaign.id,
       recipientEmail: `${token}@recipient.test`,
-      originalScheduledAt: new Date('2030-01-01T10:00:00.000Z'),
-      scheduledAt: new Date('2030-01-01T10:00:00.000Z'),
+      originalScheduledAt: new Date('2020-01-01T10:00:00.000Z'),
+      scheduledAt: new Date('2020-01-01T10:00:00.000Z'),
       status: options.status ?? EmailStatus.SCHEDULED,
       bullJobId: makeEmailJobId(token),
     },
@@ -184,7 +184,11 @@ function waitForJobs(
 }
 
 async function enqueue(emailId: string, jobId = makeEmailJobId(emailId)): Promise<void> {
-  await queue.add(SEND_EMAIL_JOB_NAME, { emailId }, { jobId });
+  await queue.add(
+    SEND_EMAIL_JOB_NAME,
+    { emailId },
+    { jobId, attempts: 5, backoff: { type: 'exponential', delay: 20 } },
+  );
 }
 
 async function clearDatabase(): Promise<void> {

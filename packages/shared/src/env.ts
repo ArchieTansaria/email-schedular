@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { emailJobRetrySchema } from './queue.js';
+
 const emptyStringToUndefined = (value: unknown): unknown => (value === '' ? undefined : value);
 
 const optionalString = z.preprocess(emptyStringToUndefined, z.string().min(1).optional());
@@ -17,6 +19,7 @@ const positiveInteger = (name: string) =>
     .positive(`${name} must be greater than zero`);
 
 export const runtimeEnvSchema = z.object({
+  ...emailJobRetrySchema.shape,
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: urlWithProtocols(['postgres:', 'postgresql:']),
   REDIS_URL: urlWithProtocols(['redis:', 'rediss:']),

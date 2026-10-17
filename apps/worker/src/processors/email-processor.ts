@@ -2,7 +2,7 @@ import { EmailStatus, type PrismaClient } from '@prisma/client';
 import type { EmailSearchProjection } from '@reachinbox/search';
 import type { RateLimitNotifier } from '@reachinbox/slack';
 import { SEND_EMAIL_JOB_NAME } from '@reachinbox/shared/queue';
-import { DelayedError, type Job } from 'bullmq';
+import { DelayedError, UnrecoverableError, type Job } from 'bullmq';
 import { z } from 'zod';
 
 import { getEffectiveSendLimits } from '../rate-limit/effective-limits.js';
@@ -105,6 +105,14 @@ export class EmailProcessor {
         'Email job is already terminal or claimed; SMTP skipped',
       );
       return { outcome: existingOutcome };
+    }
+
+    // A retry may become runnable before a previous throttling update's due time.
+    // PostgreSQL remains authoritative even if the queue transition had failed.
+    if (email.scheduledAt.getTime() > this.#now().getTime()) {
+      if (!job.token) throw new Error('Active BullMQ job is missing its lock token');
+      await job.moveToDelayed(email.scheduledAt.getTime(), job.token);
+      throw new DelayedError();
     }
 
     if (!email.sender.active) {
@@ -334,12 +342,12 @@ export async function claimScheduledEmail(prisma: PrismaClient, emailId: string)
 
 function validateJob(job: Pick<Job<unknown>, 'id' | 'name' | 'data'>): string {
   if (job.name !== SEND_EMAIL_JOB_NAME) {
-    throw new Error(`Unsupported email queue job name: ${job.name}`);
+    throw new UnrecoverableError(`Unsupported email queue job name: ${job.name}`);
   }
 
   const parsed = sendEmailJobSchema.safeParse(job.data);
   if (!parsed.success) {
-    throw new Error('Invalid send-email job payload: expected { emailId: UUID }');
+    throw new UnrecoverableError('Invalid send-email job payload: expected { emailId: UUID }');
   }
   return parsed.data.emailId;
 }

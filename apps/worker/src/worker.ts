@@ -10,6 +10,7 @@ import { ShutdownManager } from './lifecycle.js';
 import { EmailProcessor } from './processors/email-processor.js';
 import { createLimiterRedisClient, RedisSendPermitGate } from './rate-limit/send-permit.js';
 import { createRecoveryQueue, QueueReconciler } from './reconciliation/queue-reconciler.js';
+import { startRecoveryLoop } from './reconciliation/recovery-loop.js';
 import { EtherealEmailSender, getEtherealAccounts } from './smtp/ethereal-email-sender.js';
 
 loadRootEnvironment();
@@ -67,11 +68,13 @@ try {
   await limiterRedis.ping();
   await recoveryQueue.waitUntilReady();
 
-  const reconciliation = await new QueueReconciler({
+  const reconciler = new QueueReconciler({
     prisma,
     queue: recoveryQueue,
     logger,
-  }).reconcile();
+    retryConfig: config,
+  });
+  const reconciliation = await reconciler.reconcile();
   logger.info({ reconciliation }, 'Startup queue reconciliation finished');
 
   const processor = new EmailProcessor({
@@ -94,6 +97,13 @@ try {
   });
   shutdownManager.register(() => worker.close());
   await worker.waitUntilReady();
+  shutdownManager.register(
+    startRecoveryLoop({
+      reconcile: () => reconciler.reconcile(),
+      intervalMs: config.QUEUE_RECOVERY_INTERVAL_MS,
+      logger,
+    }),
+  );
   logger.info({ concurrency: config.WORKER_CONCURRENCY }, 'Email Worker ready and consuming jobs');
 } catch (error) {
   logger.error({ error }, 'Email Worker failed to start');

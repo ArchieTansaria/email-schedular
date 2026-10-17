@@ -62,7 +62,11 @@ const authRouter = createAuthRouter({
 });
 const elasticsearch = createElasticsearchClient(config);
 const emailSearch = new EmailSearchService({ client: elasticsearch, prisma });
-const emailQueueProducer = new EmailQueueProducer({ redisUrl: config.REDIS_URL, logger });
+const emailQueueProducer = new EmailQueueProducer({
+  redisUrl: config.REDIS_URL,
+  logger,
+  retryConfig: config,
+});
 const campaignScheduler = new CampaignScheduler({
   prisma,
   producer: emailQueueProducer,

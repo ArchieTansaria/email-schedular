@@ -19,6 +19,28 @@ const validEnvironment = {
 };
 
 describe('parseWorkerConfig', () => {
+  it('defaults recovery polling and accepts retry configuration shared with the API', () => {
+    expect(parseWorkerConfig(validEnvironment)).toMatchObject({
+      EMAIL_JOB_ATTEMPTS: 5,
+      EMAIL_JOB_BACKOFF_MS: 2_000,
+      QUEUE_RECOVERY_INTERVAL_MS: 60_000,
+    });
+    expect(
+      parseWorkerConfig({
+        ...validEnvironment,
+        EMAIL_JOB_ATTEMPTS: '3',
+        EMAIL_JOB_BACKOFF_MS: '100',
+        QUEUE_RECOVERY_INTERVAL_MS: '2000',
+      }),
+    ).toMatchObject({
+      EMAIL_JOB_ATTEMPTS: 3,
+      EMAIL_JOB_BACKOFF_MS: 100,
+      QUEUE_RECOVERY_INTERVAL_MS: 2_000,
+    });
+    expect(() =>
+      parseWorkerConfig({ ...validEnvironment, QUEUE_RECOVERY_INTERVAL_MS: '0' }),
+    ).toThrow();
+  });
   it('requires and parses two Ethereal accounts separately from shared runtime config', () => {
     expect(parseWorkerConfig(validEnvironment)).toMatchObject({
       WORKER_CONCURRENCY: 3,

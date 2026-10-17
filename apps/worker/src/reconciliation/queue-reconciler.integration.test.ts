@@ -5,16 +5,19 @@ import {
   EMAIL_QUEUE_NAME,
   SEND_EMAIL_JOB_NAME,
   makeEmailJobId,
+  emailJobRetryOptions,
   type SendEmailJobData,
 } from '@reachinbox/shared/queue';
-import { Worker, type Queue } from 'bullmq';
+import { Job, Worker, type Queue } from 'bullmq';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createEmailWorker } from '../email-worker.js';
 import { EmailProcessor } from '../processors/email-processor.js';
 import { makeSmtpMessageId } from '../smtp/message.js';
-import type { DeliveryInput, EmailSender } from '../smtp/types.js';
+import { AmbiguousDeliveryError, type DeliveryInput, type EmailSender } from '../smtp/types.js';
+import type { SendPermitGate } from '../rate-limit/send-permit.js';
 import { createRecoveryQueue, QueueReconciler } from './queue-reconciler.js';
+import { startRecoveryLoop } from './recovery-loop.js';
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
 if (!testDatabaseUrl) throw new Error('TEST_DATABASE_URL is required for reconciliation tests');
@@ -30,6 +33,57 @@ const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 let prefix: string;
 let queue: Queue<SendEmailJobData>;
 let workers: Worker<SendEmailJobData>[];
+let recoveryStops: Array<() => Promise<void>>;
+
+const allowPermit: SendPermitGate['acquire'] = async ({ now, delayMs }) => ({
+  allowed: true,
+  count: 1,
+  limitReachedThisReservation: false,
+  hourWindow: now.toISOString().slice(0, 13),
+  nextAllowedAt: new Date(now.getTime() + delayMs),
+});
+
+function deliveryWorker(
+  acquire: SendPermitGate['acquire'] = allowPermit,
+  send?: EmailSender['send'],
+) {
+  const sender = {
+    send: vi.fn(
+      send ??
+        (async (input: DeliveryInput) => ({
+          messageId: makeSmtpMessageId(input.emailId),
+          previewUrl: null,
+        })),
+    ),
+    close: vi.fn(),
+  };
+  const worker = createEmailWorker({
+    redisUrl,
+    prefix,
+    concurrency: 2,
+    logger,
+    processor: new EmailProcessor({
+      prisma,
+      emailSender: sender,
+      sendPermitGate: { acquire },
+      logger,
+      platformLimits: { minSendDelayMs: 1, maxEmailsPerHourPerSender: 200 },
+    }),
+  });
+  workers.push(worker);
+  return { worker, sender };
+}
+
+async function addRetryJob(emailId: string) {
+  return queue.add(
+    SEND_EMAIL_JOB_NAME,
+    { emailId },
+    {
+      jobId: makeEmailJobId(emailId),
+      ...emailJobRetryOptions({ EMAIL_JOB_ATTEMPTS: 2, EMAIL_JOB_BACKOFF_MS: 20 }),
+    },
+  );
+}
 
 async function clearDatabase(): Promise<void> {
   await prisma.email.deleteMany();
@@ -97,11 +151,13 @@ beforeEach(async () => {
   await clearDatabase();
   prefix = `reachinbox-reconcile-test-${randomUUID()}`;
   workers = [];
+  recoveryStops = [];
   queue = createRecoveryQueue(redisUrl, prefix);
   await queue.waitUntilReady();
 });
 
 afterEach(async () => {
+  await Promise.all(recoveryStops.map((stop) => stop()));
   await Promise.all(workers.map((worker) => worker.close()));
   await queue.obliterate({ force: true });
   await queue.close();
@@ -109,11 +165,148 @@ afterEach(async () => {
   logger.info.mockClear();
   logger.warn.mockClear();
   logger.error.mockClear();
+  vi.restoreAllMocks();
 });
 
 afterAll(() => prisma.$disconnect());
 
 describe('queue reconciliation', () => {
+  it('retries a transient permit failure and sends once without restarting the worker', async () => {
+    const { email } = await createEmail();
+    const acquire = vi
+      .fn<SendPermitGate['acquire']>()
+      .mockRejectedValueOnce(new Error('Transient Redis failure'))
+      .mockImplementation(allowPermit);
+    const { worker, sender } = deliveryWorker(acquire);
+    await worker.waitUntilReady();
+    const job = await addRetryJob(email.id);
+
+    await waitFor(async () => expect(await job.getState()).toBe('completed'));
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(sender.send).toHaveBeenCalledOnce();
+    expect((await queue.getJob(job.id!))?.attemptsMade).toBe(2);
+    expect((await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).status).toBe(
+      EmailStatus.SENT,
+    );
+  });
+
+  it('recovers exhausted retries on a later polling pass without a worker restart', async () => {
+    const { email } = await createEmail();
+    let available = false;
+    const acquire = vi.fn<SendPermitGate['acquire']>(async (input) => {
+      if (!available) throw new Error('Permit service unavailable');
+      return allowPermit(input);
+    });
+    const { worker, sender } = deliveryWorker(acquire);
+    await worker.waitUntilReady();
+    const job = await addRetryJob(email.id);
+    await waitFor(async () => expect(await job.getState()).toBe('failed'));
+    expect(acquire).toHaveBeenCalledTimes(2);
+    expect(sender.send).not.toHaveBeenCalled();
+    expect((await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).status).toBe(
+      EmailStatus.SCHEDULED,
+    );
+
+    available = true;
+    const recovery = reconciler();
+    recoveryStops.push(
+      startRecoveryLoop({ reconcile: () => recovery.reconcile(), intervalMs: 20, logger }),
+    );
+    await waitFor(async () =>
+      expect((await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).status).toBe(
+        EmailStatus.SENT,
+      ),
+    );
+    expect(sender.send).toHaveBeenCalledOnce();
+  });
+
+  it('respects scheduledAt after a failed moveToDelayed and does not consume a retry for the delay', async () => {
+    const { email } = await createEmail();
+    const retryAt = new Date(Date.now() + 800);
+    const acquire = vi
+      .fn<SendPermitGate['acquire']>()
+      .mockResolvedValueOnce({
+        allowed: false,
+        reason: 'MIN_DELAY',
+        retryAt,
+        count: 1,
+        hourWindow: new Date().toISOString().slice(0, 13),
+      })
+      .mockImplementation(allowPermit);
+    vi.spyOn(Job.prototype, 'moveToDelayed').mockRejectedValueOnce(
+      new Error('Redis transition failed'),
+    );
+    const { worker, sender } = deliveryWorker(acquire);
+    await worker.waitUntilReady();
+    const job = await addRetryJob(email.id);
+    await waitFor(async () => {
+      expect(await job.getState()).toBe('delayed');
+      expect((await queue.getJob(job.id!))?.attemptsMade).toBe(1);
+      expect(
+        (await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).scheduledAt,
+      ).toEqual(retryAt);
+    });
+    expect(sender.send).not.toHaveBeenCalled();
+    // The early retry only repairs the delayed transition, without reserving quota.
+    expect(acquire).toHaveBeenCalledOnce();
+    await waitFor(async () => expect(await job.getState()).toBe('completed'));
+    expect(sender.send).toHaveBeenCalledOnce();
+    expect(
+      (await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).sentAt!.getTime(),
+    ).toBeGreaterThanOrEqual(retryAt.getTime());
+  });
+
+  it('lets concurrent reconcilers restore one terminal job without removing resumed work', async () => {
+    const { email } = await createEmail();
+    const failing = new Worker<SendEmailJobData>(
+      EMAIL_QUEUE_NAME,
+      async () => {
+        throw new Error('Before SMTP');
+      },
+      {
+        connection: { url: redisUrl, maxRetriesPerRequest: null },
+        prefix,
+      },
+    );
+    workers.push(failing);
+    await failing.waitUntilReady();
+    const job = await queue.add(
+      SEND_EMAIL_JOB_NAME,
+      { emailId: email.id },
+      { jobId: makeEmailJobId(email.id) },
+    );
+    await waitFor(async () => expect(await job.getState()).toBe('failed'));
+    await failing.close();
+    workers = [];
+
+    const reports = await Promise.all([reconciler().reconcile(), reconciler().reconcile()]);
+    expect(reports.reduce((count, report) => count + report.terminalJobsRepaired, 0)).toBe(1);
+    expect(await queue.getWaitingCount()).toBe(1);
+    const first = deliveryWorker();
+    const second = deliveryWorker();
+    await Promise.all([first.worker.waitUntilReady(), second.worker.waitUntilReady()]);
+    await waitFor(async () => expect(await job.getState()).toBe('completed'));
+    expect(first.sender.send.mock.calls.length + second.sender.send.mock.calls.length).toBe(1);
+  });
+
+  it('does not retry or recover an ambiguous SMTP delivery even with an attempt budget', async () => {
+    const { email } = await createEmail();
+    const { worker, sender } = deliveryWorker(allowPermit, async () => {
+      throw new AmbiguousDeliveryError('Unknown SMTP outcome');
+    });
+    await worker.waitUntilReady();
+    const job = await addRetryJob(email.id);
+    await waitFor(async () => expect(await job.getState()).toBe('failed'));
+    expect((await queue.getJob(job.id!))?.attemptsMade).toBe(1);
+    expect((await prisma.email.findUniqueOrThrow({ where: { id: email.id } })).status).toBe(
+      EmailStatus.PROCESSING,
+    );
+    const report = await reconciler().reconcile();
+    expect(report.jobsRestored).toBe(0);
+    expect(await job.getState()).toBe('failed');
+    expect(sender.send).toHaveBeenCalledOnce();
+  });
+
   it('restores a missing future job with canonical identity, payload, and delay', async () => {
     const now = new Date('2030-01-01T14:00:00.000Z');
     const record = await createEmail({ scheduledAt: new Date('2030-01-01T14:01:00.000Z') });

@@ -10,7 +10,7 @@ const config = parseWorkerInfrastructureConfig(process.env);
 const logger = createLogger(config);
 const prisma = createPrismaClient(config.DATABASE_URL);
 const queue = createRecoveryQueue(config.REDIS_URL);
-const reconciler = new QueueReconciler({ prisma, queue, logger });
+const reconciler = new QueueReconciler({ prisma, queue, logger, retryConfig: config });
 const dryRun = process.argv.includes('--dry-run');
 
 try {

@@ -3,12 +3,13 @@ import {
   EMAIL_QUEUE_NAME,
   SEND_EMAIL_JOB_NAME,
   makeEmailJobId,
+  emailJobRetryOptions,
+  type EmailJobRetryConfig,
   type SendEmailJobData,
 } from '@reachinbox/shared/queue';
-import { Queue, type ConnectionOptions } from 'bullmq';
+import { ErrorCode, Queue, type ConnectionOptions } from 'bullmq';
 
 const DEFAULT_BATCH_SIZE = 250;
-const TERMINAL_QUEUE_STATES = new Set(['completed', 'failed']);
 
 export interface ReconciliationReport {
   dryRun: boolean;
@@ -30,13 +31,14 @@ export interface QueueReconcilerOptions {
   logger: ReconciliationLogger;
   batchSize?: number;
   now?: () => Date;
+  retryConfig?: EmailJobRetryConfig;
 }
 
 export function createRecoveryQueue(redisUrl: string, prefix?: string): Queue<SendEmailJobData> {
   const connection: ConnectionOptions = {
     url: redisUrl,
     connectTimeout: 10_000,
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest: 1,
     retryStrategy: (attempt) => Math.min(attempt * 500, 5_000),
   };
 
@@ -52,6 +54,7 @@ export class QueueReconciler {
   readonly #logger: ReconciliationLogger;
   readonly #batchSize: number;
   readonly #now: () => Date;
+  readonly #retryConfig: EmailJobRetryConfig | undefined;
 
   constructor({
     prisma,
@@ -59,12 +62,14 @@ export class QueueReconciler {
     logger,
     batchSize = DEFAULT_BATCH_SIZE,
     now = () => new Date(),
+    retryConfig,
   }: QueueReconcilerOptions) {
     this.#prisma = prisma;
     this.#queue = queue;
     this.#logger = logger;
     this.#batchSize = batchSize;
     this.#now = now;
+    this.#retryConfig = retryConfig;
   }
 
   async reconcile({ dryRun = false }: { dryRun?: boolean } = {}): Promise<ReconciliationReport> {
@@ -119,14 +124,42 @@ export class QueueReconciler {
     const job = await this.#queue.getJob(jobId);
     const state = job ? await job.getState() : 'unknown';
 
-    if (job && state !== 'unknown' && !TERMINAL_QUEUE_STATES.has(state)) {
+    if (job && state !== 'unknown' && state !== 'completed' && state !== 'failed') {
       report.jobsAlreadyPresent += 1;
       return;
     }
 
-    if (job && TERMINAL_QUEUE_STATES.has(state)) {
+    // The scan can race with delivery or another reconciliation pass.
+    const current = await this.#prisma.email.findUnique({
+      where: { id: email.id },
+      select: { status: true, scheduledAt: true },
+    });
+    if (!current || current.status !== EmailStatus.SCHEDULED) return;
+
+    if (job && (state === 'completed' || state === 'failed')) {
+      if (!report.dryRun) {
+        try {
+          // This checks the terminal state atomically. Never remove a job based
+          // on a stale getState(): another worker may already have resumed it.
+          await job.retry(state, { resetAttemptsMade: true, resetAttemptsStarted: true });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            'code' in error &&
+            [ErrorCode.JobNotExist, ErrorCode.JobNotInState, ErrorCode.JobLockNotExist].includes(
+              Number(error.code),
+            )
+          ) {
+            // Another actor changed the job. A later pass repairs any remaining gap.
+            report.jobsAlreadyPresent += 1;
+            return;
+          }
+          throw error;
+        }
+      }
       report.terminalJobsRepaired += 1;
-      if (!report.dryRun) await job.remove();
+      report.jobsRestored += 1;
+      return;
     }
 
     report.jobsRestored += 1;
@@ -137,7 +170,8 @@ export class QueueReconciler {
       { emailId: email.id },
       {
         jobId,
-        delay: Math.max(0, email.scheduledAt.getTime() - this.#now().getTime()),
+        ...emailJobRetryOptions(this.#retryConfig),
+        delay: Math.max(0, current.scheduledAt.getTime() - this.#now().getTime()),
       },
     );
   }

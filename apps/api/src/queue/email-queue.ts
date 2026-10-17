@@ -2,6 +2,8 @@ import {
   EMAIL_QUEUE_NAME,
   SEND_EMAIL_JOB_NAME,
   makeEmailJobId,
+  emailJobRetryOptions,
+  type EmailJobRetryConfig,
   type SendEmailJobData,
 } from '@reachinbox/shared/queue';
 import { Queue, type ConnectionOptions, type Job } from 'bullmq';
@@ -23,6 +25,7 @@ export interface EmailQueueProducerOptions {
   redisUrl: string;
   logger: QueueLogger;
   prefix?: string;
+  retryConfig?: EmailJobRetryConfig;
 }
 
 export function calculateJobDelay(scheduledAt: Date, now: Date = new Date()): number {
@@ -43,11 +46,12 @@ export class EmailQueueProducer {
   readonly #logger: QueueLogger;
   readonly #onError: (error: Error) => void;
 
-  constructor({ redisUrl, logger, prefix }: EmailQueueProducerOptions) {
+  constructor({ redisUrl, logger, prefix, retryConfig }: EmailQueueProducerOptions) {
     this.#logger = logger;
     this.queue = new Queue<EmailQueueJob>(EMAIL_QUEUE_NAME, {
       connection: createProducerConnectionOptions(redisUrl),
       skipWaitingForReady: true,
+      defaultJobOptions: emailJobRetryOptions(retryConfig),
       ...(prefix ? { prefix } : {}),
     });
     this.#onError = (error) => {

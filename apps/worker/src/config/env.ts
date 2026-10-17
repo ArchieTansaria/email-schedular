@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { emailJobRetrySchema } from '@reachinbox/shared/queue';
 
 const connectionUrl = (protocols: readonly string[]) =>
   z.url().refine((value) => protocols.includes(new URL(value).protocol), {
@@ -6,6 +7,8 @@ const connectionUrl = (protocols: readonly string[]) =>
   });
 
 const infrastructureFieldsSchema = z.object({
+  ...emailJobRetrySchema.shape,
+  QUEUE_RECOVERY_INTERVAL_MS: z.coerce.number().int().min(1_000).max(2_147_483_647).default(60_000),
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   DATABASE_URL: connectionUrl(['postgres:', 'postgresql:']),
   REDIS_URL: connectionUrl(['redis:', 'rediss:']),
