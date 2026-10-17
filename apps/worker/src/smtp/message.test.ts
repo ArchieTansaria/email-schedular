@@ -5,6 +5,34 @@ import { describe, expect, it } from 'vitest';
 import { buildSmtpMessage, makeSmtpMessageId } from './message.js';
 
 describe('SMTP message construction', () => {
+  it('sends both body alternatives and decodes persisted attachments', () => {
+    const message = buildSmtpMessage({
+      emailId: randomUUID(),
+      senderName: 'Sender',
+      senderEmail: 'a@example.test',
+      recipientEmail: 'b@example.test',
+      subject: 'Formatted',
+      body: 'Hello',
+      bodyHtml: '<p><strong>Hello</strong></p>',
+      attachments: [
+        {
+          filename: 'hello.txt',
+          contentType: 'text/plain',
+          contentBase64: Buffer.from('hello').toString('base64'),
+        },
+      ],
+    });
+    expect(message.text).toBe('Hello');
+    expect(message.html).toBe('<p><strong>Hello</strong></p>');
+    expect(message.attachments).toEqual([
+      {
+        filename: 'hello.txt',
+        contentType: 'text/plain',
+        content: Buffer.from('hello'),
+        contentDisposition: 'attachment',
+      },
+    ]);
+  });
   it('builds a stable Message-ID per Email identity', () => {
     const first = randomUUID();
     const second = randomUUID();

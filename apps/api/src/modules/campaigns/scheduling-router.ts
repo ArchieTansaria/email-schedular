@@ -2,6 +2,7 @@ import { extname } from 'node:path';
 
 import { Router, type ErrorRequestHandler, type RequestHandler } from 'express';
 import multer from 'multer';
+import { MAX_ATTACHMENTS } from '@reachinbox/shared/attachments';
 
 import type { CampaignScheduler } from './campaign-scheduler.js';
 import {
@@ -26,8 +27,17 @@ class TransportValidationError extends Error {}
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_LEAD_FILE_BYTES, files: 1, fields: 8 },
+  limits: {
+    fileSize: MAX_LEAD_FILE_BYTES,
+    files: MAX_ATTACHMENTS + 1,
+    fields: 9,
+    fieldSize: 100_000,
+  },
   fileFilter: (_request, file, callback) => {
+    if (file.fieldname === 'attachments') {
+      callback(null, true);
+      return;
+    }
     const extension = extname(file.originalname).toLowerCase();
     if (acceptedMimeTypes.has(file.mimetype) && acceptedExtensions.has(extension)) {
       callback(null, true);
@@ -50,7 +60,10 @@ export function createSchedulingRouter({
     ...middleware,
     requireAuthenticatedPrincipal,
     requireIdempotencyKey,
-    upload.single('file'),
+    upload.fields([
+      { name: 'file', maxCount: 1 },
+      { name: 'attachments', maxCount: MAX_ATTACHMENTS },
+    ]),
     async (request, response) => {
       const principal = response.locals.principal;
       if (!principal) {
@@ -60,7 +73,8 @@ export function createSchedulingRouter({
 
       try {
         const idempotencyKey = requireHeader(request.get('Idempotency-Key'));
-        const file = request.file;
+        const files = request.files as Record<string, Express.Multer.File[]> | undefined;
+        const file = files?.file?.[0];
         if (!file) throw new TransportValidationError('file is required');
 
         const result = await scheduler.scheduleCampaign({
@@ -68,6 +82,15 @@ export function createSchedulingRouter({
           senderId: requireField(request.body.senderId, 'senderId'),
           subject: requireField(request.body.subject, 'subject'),
           body: requireField(request.body.body, 'body'),
+          bodyHtml:
+            request.body.bodyHtml === undefined
+              ? undefined
+              : requireField(request.body.bodyHtml, 'bodyHtml'),
+          attachments: (files?.attachments ?? []).map((attachment) => ({
+            filename: attachment.originalname,
+            contentType: attachment.mimetype || 'application/octet-stream',
+            contentBase64: attachment.buffer.toString('base64'),
+          })),
           startAt: parseDateField(request.body.startAt, 'startAt'),
           delayMs: parseIntegerField(request.body.delayMs, 'delayMs'),
           hourlyLimit: parseIntegerField(request.body.hourlyLimit, 'hourlyLimit'),
@@ -180,7 +203,7 @@ function errorBody(code: string, message: string): { error: { code: string; mess
 
 function uploadErrorMessage(error: multer.MulterError): string {
   if (error.code === 'LIMIT_FILE_SIZE') return 'file must not exceed 5 MB';
-  if (error.code === 'LIMIT_FILE_COUNT') return 'only one file is allowed';
+  if (error.code === 'LIMIT_FILE_COUNT') return 'Upload one lead file and at most five attachments';
   if (error.code === 'LIMIT_FIELD_COUNT') return 'too many form fields';
   return 'invalid multipart request';
 }

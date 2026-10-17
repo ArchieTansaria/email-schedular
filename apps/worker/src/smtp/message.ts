@@ -12,6 +12,17 @@ export function buildSmtpMessage(input: DeliveryInput): SendMailOptions {
     to: input.recipientEmail,
     subject: input.subject,
     text: input.body,
+    ...(input.bodyHtml ? { html: input.bodyHtml } : {}),
+    ...(input.attachments?.length
+      ? {
+          attachments: input.attachments.map((attachment) => ({
+            filename: attachment.filename,
+            contentType: attachment.contentType,
+            content: Buffer.from(attachment.contentBase64, 'base64'),
+            contentDisposition: 'attachment' as const,
+          })),
+        }
+      : {}),
     messageId: makeSmtpMessageId(input.emailId),
   };
 }

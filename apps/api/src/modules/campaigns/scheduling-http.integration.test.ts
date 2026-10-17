@@ -128,6 +128,50 @@ afterEach(async () => {
 
 afterAll(() => prisma.$disconnect());
 
+describe('formatted campaigns with attachments', () => {
+  it('persists sanitized HTML and bytes, replays idempotently, and detects changed attachments', async () => {
+    const { user, sender } = await createUserAndSender();
+    authenticatedUserId = user.id;
+    const app = createTestApp(producer);
+    const send = (contents: string) =>
+      scheduleRequest(app, sender.id, 'rich-campaign')
+        .field(
+          'bodyHtml',
+          '<p onclick="bad()"><strong>Campaign body</strong><script>bad()</script></p>',
+        )
+        .attach('attachments', Buffer.from(contents), {
+          filename: 'notes.txt',
+          contentType: 'text/plain',
+        });
+    const first = await send('attachment content').expect(202);
+    const campaign = await prisma.campaign.findUniqueOrThrow({
+      where: { id: first.body.campaignId },
+    });
+    expect(campaign.bodyHtml).toBe('<p><strong>Campaign body</strong></p>');
+    expect(campaign.attachments).toEqual([
+      {
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+        contentBase64: Buffer.from('attachment content').toString('base64'),
+      },
+    ]);
+    const retry = await send('attachment content').expect(202);
+    expect(retry.body.campaignId).toBe(first.body.campaignId);
+    await send('different content').expect(409);
+    expect(await prisma.campaign.count()).toBe(1);
+  });
+
+  it('rejects attachment totals over 5 MB without saving a campaign', async () => {
+    const { user, sender } = await createUserAndSender();
+    authenticatedUserId = user.id;
+    await scheduleRequest(createTestApp(producer), sender.id)
+      .attach('attachments', Buffer.alloc(3 * 1024 * 1024), 'first.txt')
+      .attach('attachments', Buffer.alloc(3 * 1024 * 1024), 'second.txt')
+      .expect(400);
+    expect(await prisma.campaign.count()).toBe(0);
+  });
+});
+
 describe('POST /api/v1/campaigns', () => {
   it('persists normalized recipients and creates one minimal BullMQ job per Email', async () => {
     const { user, sender } = await createUserAndSender();

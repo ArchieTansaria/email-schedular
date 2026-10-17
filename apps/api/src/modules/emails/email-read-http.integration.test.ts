@@ -106,6 +106,37 @@ afterAll(async () => {
 });
 
 describe('sender and email read APIs', () => {
+  it('exposes attachment metadata and restricts downloads to the owner', async () => {
+    const owner = await fixture('attachment-owner');
+    const foreign = await fixture('foreign');
+    const email = await createEmail(owner, { status: EmailStatus.SENT });
+    await prisma.campaign.update({
+      where: { id: owner.campaign.id },
+      data: {
+        bodyHtml: '<p><u>Hello</u></p>',
+        attachments: [
+          {
+            filename: 'notes.txt',
+            contentType: 'text/plain',
+            contentBase64: Buffer.from('private bytes').toString('base64'),
+          },
+        ],
+      },
+    });
+    authenticatedUserId = owner.user.id;
+    const detail = await request(app()).get(`/api/v1/emails/${email.id}`).expect(200);
+    expect(detail.body.bodyHtml).toBe('<p><u>Hello</u></p>');
+    expect(detail.body.attachments[0]).toMatchObject({ filename: 'notes.txt', size: 13 });
+    expect(JSON.stringify(detail.body)).not.toContain('contentBase64');
+    const url = detail.body.attachments[0].downloadUrl as string;
+    const download = await request(app()).get(url).expect(200);
+    expect(download.body).toEqual(Buffer.from('private bytes'));
+    expect(download.headers['content-disposition']).toContain('attachment;');
+    authenticatedUserId = foreign.user.id;
+    await request(app()).get(url).expect(404);
+    authenticatedUserId = undefined;
+    await request(app()).get(url).expect(401);
+  });
   it('requires authentication for every read route', async () => {
     await request(app()).get('/api/v1/senders').expect(401);
     await request(app()).get('/api/v1/emails/scheduled').expect(401);

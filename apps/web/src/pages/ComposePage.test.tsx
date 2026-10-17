@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError } from '../api/client.js';
@@ -45,7 +45,11 @@ async function fillValidForm() {
   fireEvent.change(await screen.findByLabelText('Upload List'), { target: { files: [file] } });
   expect(await screen.findByText(/2 unique valid recipients/)).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Campaign subject' } });
-  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Campaign body' } });
+  const message = await screen.findByRole('textbox', { name: 'Message' });
+  await act(async () => {
+    message.innerHTML = '<p>Campaign body</p>';
+    fireEvent.input(message);
+  });
   return file;
 }
 
@@ -62,6 +66,20 @@ beforeEach(() => {
 });
 
 describe('ComposePage', () => {
+  it('submits attachments and lets users remove selected files', async () => {
+    renderCompose();
+    await fillValidForm();
+    const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
+    fireEvent.change(screen.getByLabelText('Choose attachments'), { target: { files: [file] } });
+    expect(screen.getByRole('button', { name: 'Remove notes.txt' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    await waitFor(() => expect(mockedApi.schedule).toHaveBeenCalledOnce());
+    const form = mockedApi.schedule.mock.calls[0]![0];
+    expect(form.get('attachments')).toBe(file);
+    expect(form.get('bodyHtml')).toContain('<p>Campaign body</p>');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }));
+    expect(screen.queryByRole('button', { name: 'Remove notes.txt' })).not.toBeInTheDocument();
+  });
   it('shows the no-sender state and disables scheduling', async () => {
     mockedApi.senders.mockResolvedValue({ items: [] });
     renderCompose();

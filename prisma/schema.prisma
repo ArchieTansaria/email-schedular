@@ -49,6 +49,8 @@ model Campaign {
   senderId        String   @db.Uuid
   subject         String
   body            String   @db.Text
+  bodyHtml        String?  @db.Text
+  attachments     Json     @default("[]")
   startAt         DateTime @db.Timestamptz(3)
   delayMs         Int
   hourlyLimit     Int

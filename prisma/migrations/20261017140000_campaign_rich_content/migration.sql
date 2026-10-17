@@ -1,0 +1,3 @@
+ALTER TABLE "Campaign"
+ADD COLUMN "bodyHtml" TEXT,
+ADD COLUMN "attachments" JSONB NOT NULL DEFAULT '[]';

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { type FormEvent, useMemo, useState } from 'react';
+import { type FormEvent, lazy, Suspense, useMemo, useRef, useState } from 'react';
+import { MAX_ATTACHMENTS, MAX_ATTACHMENT_BYTES } from '@reachinbox/shared/attachments';
 import { Link, useNavigate } from 'react-router-dom';
 
 import { api, readableError } from '../api/client.js';
@@ -9,6 +10,9 @@ import { parseLeadFile, type ParsedLeadFile } from '../lib/leads.js';
 import { toLocalDateTimeInput, tomorrowAt } from '../lib/time.js';
 
 const initialStart = () => toLocalDateTimeInput(new Date(Date.now() + 5 * 60_000));
+const MessageEditor = lazy(() =>
+  import('../components/MessageEditor.js').then((module) => ({ default: module.MessageEditor })),
+);
 
 export function ComposePage() {
   const navigate = useNavigate();
@@ -17,6 +21,10 @@ export function ComposePage() {
   const [senderId, setSenderId] = useState('');
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const [bodyHtml, setBodyHtml] = useState('');
+  const [attachments, setAttachments] = useState<Array<{ id: string; file: File }>>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const attachmentInput = useRef<HTMLInputElement>(null);
   const [leadFile, setLeadFile] = useState<ParsedLeadFile | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [startAt, setStartAt] = useState(initialStart);
@@ -37,12 +45,24 @@ export function ComposePage() {
         senderId: effectiveSenderId,
         subject: subject.trim(),
         body: body.trim(),
+        bodyHtml,
+        attachments: attachments.map(({ id }) => id),
         startAt,
         delaySeconds,
         hourlyLimit,
         recipients: leadFile?.recipients ?? [],
       }),
-    [effectiveSenderId, subject, body, startAt, delaySeconds, hourlyLimit, leadFile],
+    [
+      effectiveSenderId,
+      subject,
+      body,
+      bodyHtml,
+      attachments,
+      startAt,
+      delaySeconds,
+      hourlyLimit,
+      leadFile,
+    ],
   );
 
   async function chooseFile(file: File | undefined) {
@@ -89,6 +109,8 @@ export function ComposePage() {
     form.set('senderId', effectiveSenderId);
     form.set('subject', subject.trim());
     form.set('body', body.trim());
+    form.set('bodyHtml', bodyHtml);
+    for (const attachment of attachments) form.append('attachments', attachment.file);
     form.set('startAt', startDate.toISOString());
     form.set('delayMs', String(delayMs));
     form.set('hourlyLimit', String(limit));
@@ -271,33 +293,67 @@ export function ComposePage() {
             value={hourlyLimit}
           />
         </div>
-        <section className="editor-shell">
-          <label className="sr-only" htmlFor="body">
-            Message
-          </label>
-          <textarea
-            className="message-editor"
-            id="body"
-            onChange={(event) => setBody(event.target.value)}
-            placeholder="Start writing…"
-            value={body}
+        <Suspense fallback={<p className="form-help">Loading editor…</p>}>
+          <MessageEditor
+            onChange={(text, html) => {
+              setBody(text);
+              setBodyHtml(html);
+            }}
+            onAttach={() => attachmentInput.current?.click()}
           />
-          <span aria-hidden className="editor-placeholder">
-            Type your Reply...
-          </span>
-          <div aria-label="Formatting preview (plain text only)" className="editor-toolbar">
-            <span aria-hidden>↶</span>
-            <span aria-hidden>↷</span>
-            <span aria-hidden>Tt</span>
-            <strong aria-hidden>B</strong>
-            <em aria-hidden>I</em>
-            <u aria-hidden>U</u>
-            <span aria-hidden>≡</span>
-            <span aria-hidden>☷</span>
-            <span aria-hidden>❝</span>
-            <span className="toolbar-note">Plain text</span>
-          </div>
-        </section>
+        </Suspense>
+        <input
+          ref={attachmentInput}
+          className="sr-only"
+          type="file"
+          multiple
+          aria-label="Choose attachments"
+          onChange={(event) => {
+            const files = [...(event.target.files ?? [])];
+            event.target.value = '';
+            const next = [
+              ...attachments,
+              ...files.map((file) => ({ id: crypto.randomUUID(), file })),
+            ];
+            const error =
+              next.length > MAX_ATTACHMENTS
+                ? 'Attach at most five files.'
+                : next.some(({ file }) => file.size === 0)
+                  ? 'Attachments must not be empty.'
+                  : next.reduce((size, { file }) => size + file.size, 0) > MAX_ATTACHMENT_BYTES
+                    ? 'Attachments must total at most 5 MB.'
+                    : null;
+            setAttachmentError(error);
+            if (!error) setAttachments(next);
+          }}
+        />
+        <p className="form-help">Up to five attachments, 5 MB total.</p>
+        {attachments.length ? (
+          <ul className="attachment-list">
+            {attachments.map(({ id, file }) => (
+              <li key={id}>
+                <span>
+                  {file.name} · {Math.max(1, Math.ceil(file.size / 1024))} KB
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => {
+                    setAttachments(attachments.filter((item) => item.id !== id));
+                    setAttachmentError(null);
+                  }}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {attachmentError ? (
+          <p className="form-error" role="alert">
+            {attachmentError}
+          </p>
+        ) : null}
         {validationError ? (
           <p className="form-error mt-4" role="alert">
             {validationError}

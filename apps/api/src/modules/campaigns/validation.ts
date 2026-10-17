@@ -1,5 +1,7 @@
 import type { RuntimeEnv } from '@reachinbox/shared/env';
 import { z } from 'zod';
+import { campaignAttachmentsSchema, type CampaignAttachment } from '@reachinbox/shared/attachments';
+import { sanitizeEmailHtml } from './rich-content.js';
 
 import { SchedulingValidationError } from './errors.js';
 import { normalizeRecipients } from './recipients.js';
@@ -16,6 +18,8 @@ export interface ScheduleCampaignInput {
   senderId: string;
   subject: string;
   body: string;
+  bodyHtml?: string | undefined;
+  attachments?: CampaignAttachment[] | undefined;
   startAt: Date;
   delayMs: number;
   hourlyLimit: number;
@@ -32,6 +36,8 @@ const scheduleCampaignSchema = z.object({
   senderId: z.uuid(),
   subject: z.string().trim().min(1, 'subject must not be empty'),
   body: z.string().trim().min(1, 'body must not be empty'),
+  bodyHtml: z.string().max(100_000).optional(),
+  attachments: campaignAttachmentsSchema,
   startAt: z.date(),
   delayMs: z.number().int().nonnegative().max(2_147_483_647),
   hourlyLimit: z.number().int().positive().max(2_147_483_647),
@@ -69,5 +75,9 @@ export function validateScheduleCampaignInput(
     ]);
   }
 
-  return { ...parsed.data, recipients };
+  return {
+    ...parsed.data,
+    bodyHtml: parsed.data.bodyHtml ? sanitizeEmailHtml(parsed.data.bodyHtml) : undefined,
+    recipients,
+  };
 }

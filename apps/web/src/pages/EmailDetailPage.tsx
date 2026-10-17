@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import DOMPurify from 'dompurify';
 import { Link, useParams } from 'react-router-dom';
 import { api, readableError } from '../api/client.js';
 import { StatusBadge } from '../components/StatusBadge.js';
@@ -60,7 +61,25 @@ export function EmailDetailPage() {
           </div>
           <time>{formatDateTime(item.sentAt ?? item.scheduledAt)}</time>
         </div>
-        <div className="email-body">{item.body}</div>
+        {item.bodyHtml ? (
+          <div
+            className="email-body rich-content"
+            dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(item.bodyHtml) }}
+          />
+        ) : (
+          <div className="email-body">{item.body}</div>
+        )}
+        {item.attachments?.length ? (
+          <ul className="attachment-list">
+            {item.attachments.map((attachment) => (
+              <li key={attachment.downloadUrl}>
+                <a href={attachment.downloadUrl} download>
+                  {attachment.filename} · {Math.max(1, Math.ceil(attachment.size / 1024))} KB
+                </a>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {item.failureReason ? (
           <div className="mt-6 rounded-lg bg-red-50 p-4 text-sm text-red-700">
             <strong>Delivery failed:</strong> {item.failureReason}

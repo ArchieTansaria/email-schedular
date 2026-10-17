@@ -342,6 +342,17 @@ describe('BullMQ Worker delivery', () => {
 
   it('consumes a job and persists successful SMTP evidence', async () => {
     const { email } = await createTestEmail();
+    const attachments = [
+      {
+        filename: 'notes.txt',
+        contentType: 'text/plain',
+        contentBase64: Buffer.from('SMTP attachment').toString('base64'),
+      },
+    ];
+    await prisma.campaign.update({
+      where: { id: email.campaignId },
+      data: { bodyHtml: '<p><strong>Worker campaign body</strong></p>', attachments },
+    });
     const sender = successfulSender();
     const worker = startWorker(sender);
     await worker.waitUntilReady();
@@ -360,6 +371,8 @@ describe('BullMQ Worker delivery', () => {
         recipientEmail: email.recipientEmail,
         subject: 'Worker campaign subject',
         body: 'Worker campaign body',
+        bodyHtml: '<p><strong>Worker campaign body</strong></p>',
+        attachments,
       }),
     );
     expect(delivered).toMatchObject({

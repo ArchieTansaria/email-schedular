@@ -63,6 +63,8 @@ export interface EmailDetailResponse {
   recipientEmail: string;
   subject: string;
   body: string;
+  bodyHtml?: string | null;
+  attachments?: Array<{ filename: string; size: number; downloadUrl: string }>;
   status: EmailLifecycleStatus;
   originalScheduledAt: string;
   scheduledAt: string;

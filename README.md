@@ -40,19 +40,19 @@ The project is intentionally more than a CRUD dashboard. It demonstrates durable
 
 ### Required product surface
 
-| Area             | Implementation                                                                                                                   |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| Authentication   | Real Google OAuth/OIDC, Redis-backed server sessions, profile display, and logout                                                |
-| User interface   | Responsive mail-client-style React UI based on the supplied login, dashboard, Compose, send-later, and detail references         |
-| Compose          | Sender selection, CSV/TXT upload, recipient preview/deduplication, subject, plain-text body, start time, delay, and hourly limit |
-| Scheduling       | PostgreSQL persistence followed by BullMQ delayed jobs; no cron and no process-local timers                                      |
-| Dashboard        | Scheduled/Processing and Sent/Failed lists, totals, cursor pagination, polling, loading/empty/error states, and email detail     |
-| Delivery         | Separate configurable-concurrency Worker and two environment-configured Ethereal SMTP identities                                 |
-| Rate limiting    | Atomic Redis Lua permit per sender for minimum spacing and fixed UTC-hour quotas                                                 |
-| Search           | Elasticsearch-backed, tenant-scoped subject/body/recipient/sender search with status filters                                     |
-| Queue visibility | Authenticated Bull Board at `/admin/queues`                                                                                      |
-| Slack            | Real OAuth V2 using the minimal `incoming-webhook` scope, connection controls, test notification, and rate-limit alerts          |
-| Recovery         | Automatic job retries, startup/background/manual PostgreSQL-to-BullMQ reconciliation, and graceful shutdown                      |
+| Area             | Implementation                                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication   | Real Google OAuth/OIDC, Redis-backed server sessions, profile display, and logout                                                              |
+| User interface   | Responsive mail-client-style React UI based on the supplied login, dashboard, Compose, send-later, and detail references                       |
+| Compose          | Sender selection, CSV/TXT upload, recipient preview/deduplication, subject, rich-text editor, attachments, start time, delay, and hourly limit |
+| Scheduling       | PostgreSQL persistence followed by BullMQ delayed jobs; no cron and no process-local timers                                                    |
+| Dashboard        | Scheduled/Processing and Sent/Failed lists, totals, cursor pagination, polling, loading/empty/error states, and email detail                   |
+| Delivery         | Separate configurable-concurrency Worker and two environment-configured Ethereal SMTP identities                                               |
+| Rate limiting    | Atomic Redis Lua permit per sender for minimum spacing and fixed UTC-hour quotas                                                               |
+| Search           | Elasticsearch-backed, tenant-scoped subject/body/recipient/sender search with status filters                                                   |
+| Queue visibility | Authenticated Bull Board at `/admin/queues`                                                                                                    |
+| Slack            | Real OAuth V2 using the minimal `incoming-webhook` scope, connection controls, test notification, and rate-limit alerts                        |
+| Recovery         | Automatic job retries, startup/background/manual PostgreSQL-to-BullMQ reconciliation, and graceful shutdown                                    |
 
 ### Reliability and security
 
@@ -415,8 +415,14 @@ All user-data endpoints require the Redis-backed session cookie. Ownership is de
 | `delayMs`                | Integer no lower than `MIN_SEND_DELAY_MS`                                |
 | `hourlyLimit`            | Positive integer no greater than `MAX_EMAILS_PER_HOUR_PER_SENDER`        |
 | `file`                   | One `.csv` or `.txt` file, maximum 5 MB                                  |
+| `bodyHtml`               | Optional HTML body, maximum 100,000 characters; sanitized on the server  |
+| `attachments`            | Optional repeated file field: at most five files, 5 MB total             |
 
 The backend extracts, lowercases, validates, and first-occurrence-deduplicates up to 10,000 recipients. A successful asynchronous request returns `202` with a compact campaign summary, not every Email row.
+
+Compose supports bold, italic, underline, headings, lists, quotes, alignment, undo/redo, and clearing formatting. SMTP receives both plain-text and sanitized HTML alternatives. Plain text remains the searchable preview. Attachments are persisted once per campaign as bounded base64 JSON in PostgreSQL, so separate Workers and restarts do not depend on ephemeral files. The worker sends them as MIME attachments; the email detail view provides authenticated, owner-scoped downloads. Formatting and attachment bytes are included in scheduling idempotency comparisons.
+
+Deployments upgrading from plain-text Compose must apply the additive `20261017140000_campaign_rich_content` migration using `pnpm db:migrate:deploy` from the new build before serving the updated API/Worker. Existing campaigns retain a null HTML body and an empty attachment list; no data reset is required.
 
 ### List and search queries
 
@@ -565,22 +571,22 @@ The Redis service must provide durable Redis-protocol storage, TLS (`rediss://` 
 
 ## Trade-offs and known limitations
 
-| Decision                        | Consequence                                                                                                                                 |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| PostgreSQL first, then BullMQ   | Keeps queue jobs from preceding rows, but creates a recoverable DB-to-queue dual-write gap handled by same-key retry and reconciliation.    |
-| At-most-once-biased SMTP claim  | Strong duplicate-attempt protection, but ambiguous `PROCESSING` records require manual investigation rather than automatic resend.          |
-| Fixed UTC-hour limiter          | Easy to explain and atomically enforce across Workers, but less smooth than a rolling-window algorithm.                                     |
-| Permit before DB claim/SMTP     | Never sends without shared permission; rare claim races or failures can conservatively consume quota.                                       |
-| Elasticsearch direct projection | Much simpler than an outbox/indexing queue, but search is eventually consistent and failures require reindex repair.                        |
-| Best-effort Slack               | Notification failure never affects delivery; a failed webhook retries only if another qualifying alert opportunity occurs.                  |
-| Redis sessions                  | Simple revocable same-origin browser auth, but Redis availability is required for authentication.                                           |
-| Ethereal SMTP                   | Safe, observable fake delivery for evaluation; it is not a real outbound email provider.                                                    |
-| Plain-text body                 | Matches scheduling requirements without introducing unsupported rich-text persistence or attachment storage.                                |
-| Polling every ~4 seconds        | Keeps the dashboard current without WebSockets; transitions may appear with a short UI delay.                                               |
-| One shared Bull Board           | Excellent operational visibility, but any authenticated application user can inspect the assignment queue; no admin role model is included. |
-| Manual deployment               | Appropriate for a time-boxed assignment; CI/CD, Kubernetes, Terraform, and autoscaling policy are intentionally excluded.                   |
+| Decision                        | Consequence                                                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL first, then BullMQ   | Keeps queue jobs from preceding rows, but creates a recoverable DB-to-queue dual-write gap handled by same-key retry and reconciliation.        |
+| At-most-once-biased SMTP claim  | Strong duplicate-attempt protection, but ambiguous `PROCESSING` records require manual investigation rather than automatic resend.              |
+| Fixed UTC-hour limiter          | Easy to explain and atomically enforce across Workers, but less smooth than a rolling-window algorithm.                                         |
+| Permit before DB claim/SMTP     | Never sends without shared permission; rare claim races or failures can conservatively consume quota.                                           |
+| Elasticsearch direct projection | Much simpler than an outbox/indexing queue, but search is eventually consistent and failures require reindex repair.                            |
+| Best-effort Slack               | Notification failure never affects delivery; a failed webhook retries only if another qualifying alert opportunity occurs.                      |
+| Redis sessions                  | Simple revocable same-origin browser auth, but Redis availability is required for authentication.                                               |
+| Ethereal SMTP                   | Safe, observable fake delivery for evaluation; it is not a real outbound email provider.                                                        |
+| Bounded database attachments    | Simple durable storage for demo-sized files; up to five attachments and 5 MB total per campaign. Larger-scale uploads would use object storage. |
+| Polling every ~4 seconds        | Keeps the dashboard current without WebSockets; transitions may appear with a short UI delay.                                                   |
+| One shared Bull Board           | Excellent operational visibility, but any authenticated application user can inspect the assignment queue; no admin role model is included.     |
+| Manual deployment               | Appropriate for a time-boxed assignment; CI/CD, Kubernetes, Terraform, and autoscaling policy are intentionally excluded.                       |
 
-Other deliberate exclusions include password authentication, attachment persistence, mail receiving/threading, delete/star mutations, automatic resend of ambiguous SMTP outcomes, advanced Elasticsearch aliases/pipelines, and sender-management UI.
+Other deliberate exclusions include password authentication, inline image embedding, mail receiving/threading, delete/star mutations, automatic resend of ambiguous SMTP outcomes, advanced Elasticsearch aliases/pipelines, and sender-management UI.
 
 ## Demo checklist
 

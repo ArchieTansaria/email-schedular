@@ -6,6 +6,7 @@ import type {
   EmailListResponse,
 } from '@reachinbox/shared/contracts';
 import { z } from 'zod';
+import { attachmentSize, campaignAttachmentsSchema } from '@reachinbox/shared/attachments';
 
 const cursorSchema = z.object({
   timestamp: z.iso.datetime(),
@@ -34,7 +35,7 @@ const emailDetailSelect = Prisma.validator<Prisma.EmailSelect>()({
   scheduledAt: true,
   sentAt: true,
   failureReason: true,
-  campaign: { select: { subject: true, body: true } },
+  campaign: { select: { subject: true, body: true, bodyHtml: true, attachments: true } },
   sender: { select: { id: true, fromName: true, fromEmail: true } },
 });
 
@@ -128,6 +129,14 @@ export class EmailReadService {
       recipientEmail: email.recipientEmail,
       subject: email.campaign.subject,
       body: email.campaign.body,
+      bodyHtml: email.campaign.bodyHtml,
+      attachments: campaignAttachmentsSchema
+        .parse(email.campaign.attachments)
+        .map((attachment, index) => ({
+          filename: attachment.filename,
+          size: attachmentSize(attachment),
+          downloadUrl: `/api/v1/emails/${email.id}/attachments/${index}`,
+        })),
       status: email.status as EmailLifecycleStatus,
       originalScheduledAt: email.originalScheduledAt.toISOString(),
       scheduledAt: email.scheduledAt.toISOString(),
@@ -135,6 +144,16 @@ export class EmailReadService {
       failureReason: email.failureReason,
       sender: email.sender,
     };
+  }
+
+  async findAttachment(userId: string, emailId: string, index: number) {
+    const email = await this.#prisma.email.findFirst({
+      where: { id: emailId, userId },
+      select: { campaign: { select: { attachments: true } } },
+    });
+    return email
+      ? (campaignAttachmentsSchema.parse(email.campaign.attachments)[index] ?? null)
+      : null;
   }
 }
 

@@ -6,6 +6,10 @@
   "main": "./dist/index.js",
   "types": "./src/index.ts",
   "exports": {
+    "./attachments": {
+      "types": "./src/attachments.ts",
+      "import": "./dist/attachments.js"
+    },
     ".": {
       "types": "./src/index.ts",
       "import": "./dist/index.js"

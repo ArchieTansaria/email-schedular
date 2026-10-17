@@ -1,3 +1,5 @@
+import type { CampaignAttachment } from '@reachinbox/shared/attachments';
+
 export interface DeliveryInput {
   emailId: string;
   senderName: string;
@@ -5,6 +7,8 @@ export interface DeliveryInput {
   recipientEmail: string;
   subject: string;
   body: string;
+  bodyHtml?: string | undefined;
+  attachments?: CampaignAttachment[] | undefined;
 }
 
 export interface DeliveryResult {

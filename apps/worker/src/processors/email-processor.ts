@@ -2,6 +2,7 @@ import { EmailStatus, type PrismaClient } from '@prisma/client';
 import type { EmailSearchProjection } from '@reachinbox/search';
 import type { RateLimitNotifier } from '@reachinbox/slack';
 import { SEND_EMAIL_JOB_NAME } from '@reachinbox/shared/queue';
+import { campaignAttachmentsSchema } from '@reachinbox/shared/attachments';
 import { DelayedError, UnrecoverableError, type Job } from 'bullmq';
 import { z } from 'zod';
 
@@ -190,6 +191,8 @@ export class EmailProcessor {
       recipientEmail: email.recipientEmail,
       subject: email.campaign.subject,
       body: email.campaign.body,
+      bodyHtml: email.campaign.bodyHtml ?? undefined,
+      attachments: campaignAttachmentsSchema.parse(email.campaign.attachments),
     };
 
     let delivery;

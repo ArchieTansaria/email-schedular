@@ -629,12 +629,12 @@ button:disabled {
   overflow: hidden;
 }
 .message-editor {
-  min-height: 390px;
+  min-height: 320px;
   width: 100%;
   resize: vertical;
   border: 0;
   background: transparent;
-  padding: 5.15rem 1rem 1rem;
+  padding: 1rem;
   outline: 0;
   color: #25322a;
   font-size: 0.78rem;
@@ -642,7 +642,7 @@ button:disabled {
 }
 .editor-placeholder {
   position: absolute;
-  top: 0.8rem;
+  top: 5.15rem;
   left: 1rem;
   color: #a5ada8;
   font-size: 0.7rem;
@@ -652,12 +652,11 @@ button:disabled {
   color: #a5ada8;
 }
 .editor-toolbar {
-  position: absolute;
-  top: 40px;
-  left: 0.75rem;
-  right: 0.75rem;
+  position: relative;
+  margin: 0.75rem;
   display: flex;
-  height: 32px;
+  min-height: 32px;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.8rem;
   border-radius: 999px;
@@ -665,6 +664,91 @@ button:disabled {
   padding: 0 0.8rem;
   color: #8d9791;
   font-size: 0.68rem;
+}
+.editor-toolbar button {
+  padding: 0.25rem 0.35rem;
+  border-radius: 4px;
+  color: #405548;
+  cursor: pointer;
+}
+.editor-toolbar button:hover,
+.editor-toolbar button[aria-pressed='true'] {
+  background: #e3f3e9;
+  color: #087a42;
+}
+.editor-toolbar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.editor-toolbar button[aria-label='Bold'] {
+  font-weight: 700;
+}
+.editor-toolbar button[aria-label='Italic'] {
+  font-style: italic;
+}
+.editor-toolbar button[aria-label='Underline'] {
+  text-decoration: underline;
+}
+.editor-toolbar select {
+  max-width: 95px;
+  background: transparent;
+  color: #405548;
+}
+.rich-content p {
+  margin: 0.4em 0;
+}
+.message-editor p:only-child:has(> br:only-child)::before {
+  content: 'Start writing…';
+  float: left;
+  height: 0;
+  color: #a5ada8;
+  pointer-events: none;
+}
+.rich-content ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+}
+.rich-content ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+}
+.rich-content blockquote {
+  border-left: 3px solid #a5c8b3;
+  margin: 0.6em 0;
+  padding-left: 1rem;
+}
+.rich-content h2 {
+  font-size: 1.5em;
+  font-weight: 700;
+}
+.rich-content h3 {
+  font-size: 1.2em;
+  font-weight: 600;
+}
+.rich-content a {
+  text-decoration: underline;
+}
+.email-body.rich-content {
+  white-space: normal;
+}
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.attachment-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid #d9e4dc;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+.attachment-list button {
+  cursor: pointer;
+  padding: 0 0.25rem;
 }
 .toolbar-note {
   margin-left: auto;

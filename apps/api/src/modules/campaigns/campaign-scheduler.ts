@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { campaignAttachmentsSchema } from '@reachinbox/shared/attachments';
 
 import { makeEmailJobId } from '@reachinbox/shared/queue';
 import type { EmailSearchProjection } from '@reachinbox/search';
@@ -169,6 +170,8 @@ export class CampaignScheduler {
             senderId: input.senderId,
             subject: input.subject,
             body: input.body,
+            bodyHtml: input.bodyHtml ?? null,
+            attachments: input.attachments ?? [],
             startAt: input.startAt,
             delayMs: input.delayMs,
             hourlyLimit: input.hourlyLimit,
@@ -228,6 +231,9 @@ function isSameSchedulingIntent(
     campaign.senderId === input.senderId &&
     campaign.subject === input.subject &&
     campaign.body === input.body &&
+    campaign.bodyHtml === (input.bodyHtml ?? null) &&
+    JSON.stringify(campaignAttachmentsSchema.parse(campaign.attachments)) ===
+      JSON.stringify(input.attachments ?? []) &&
     campaign.startAt.getTime() === input.startAt.getTime() &&
     campaign.delayMs === input.delayMs &&
     campaign.hourlyLimit === input.hourlyLimit &&

@@ -22,6 +22,37 @@ export function createEmailReadRouter(options: {
 
   router.get('/scheduled', listHandler(options.emails, 'scheduled'));
   router.get('/sent', listHandler(options.emails, 'sent'));
+  router.get('/:id/attachments/:index', async (request, response, next) => {
+    const params = z
+      .object({ id: z.uuid(), index: z.coerce.number().int().min(0).max(4) })
+      .safeParse(request.params);
+    if (!params.success) {
+      response.status(400).json({ error: { code: 'BAD_REQUEST', message: 'Invalid attachment' } });
+      return;
+    }
+    try {
+      const attachment = await options.emails.findAttachment(
+        response.locals.principal!.userId,
+        params.data.id,
+        params.data.index,
+      );
+      if (!attachment) {
+        response
+          .status(404)
+          .json({ error: { code: 'NOT_FOUND', message: 'Attachment not found' } });
+        return;
+      }
+      response.set({
+        'Content-Type': 'application/octet-stream',
+        'X-Content-Type-Options': 'nosniff',
+        'Cache-Control': 'private, no-store',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(attachment.filename).replace(/'/g, '%27')}`,
+      });
+      response.send(Buffer.from(attachment.contentBase64, 'base64'));
+    } catch (error) {
+      next(error);
+    }
+  });
   router.get('/:id', async (request, response, next) => {
     const params = detailParamsSchema.safeParse(request.params);
     if (!params.success) {
